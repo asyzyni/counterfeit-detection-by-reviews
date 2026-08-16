@@ -208,6 +208,102 @@ class ExperimentConfig:
         
         if self.min_reviews_per_product < 1:
             raise ValueError(
-                mnimal 1
+                "mnimal 1"
             )
+        
+        if self.hmm_components < 2:
+            raise ValueError(
+                "hmm_components minimal 2"
+            )
+
+        if self.sentiment_batch_size <= 0:
+            raise ValueError(
+                "sentiment_batch size must more than zero"
+            )
+        
+        if sentiment_max_length <=:
+            raise ValueError (
+                "sentiment_max_length must more than zero"
+            )
+
+        # =========================================================
+        # INITIALIZATION
+        # =========================================================
+
+    def setup(self) -> None:
+        """
+        Validasi konfigurasi dan buat folder pipeline.
+
+        Dipanggil sekali saat pipeline mulai.
+        """
+
+        self.validate()
+
+        self.create_directories()
+
+    # =========================================================
+    # DISPLAY
+    # =========================================================
+
+    def summary(self) -> None:
+        """
+        Menampilkan konfigurasi utama eksperimen.
+        """
+
+        print("=" * 60)
+        print(self.experiment_name)
+        print("=" * 60)
+
+        print(f"Base directory : {self.base_dir}")
+        print(f"Data directory : {self.data_dir}")
+        print(f"Output         : {self.output_dir}")
+
+        print()
+
+        print("Preprocessing")
+        print(f"  Chunk size   : {self.chunk_size:,}")
+        print(f"  Sample rows  : {self.sample_rows:,}")
+        print(
+            f"  Min length   : "
+            f"{self.min_review_length}"
+        )
+
+        print()
+
+        print("Sentiment")
+        print(
+            f"  Batch size   : "
+            f"{self.sentiment_batch_size}"
+        )
+        print(
+            f"  Max length   : "
+            f"{self.sentiment_max_length}"
+        )
+
+        print()
+
+        print("HMM")
+        print(
+            f"  Components   : "
+            f"{self.hmm_components}"
+        )
+        print(
+            f"  Covariance   : "
+            f"{self.hmm_covariance_type}"
+        )
+
+        print()
+
+        print("Split")
+        print(
+            f"  Test size    : "
+            f"{self.test_size}"
+        )
+        print(
+            f"  Random state : "
+            f"{self.random_state}"
+        )
+
+        print("=" * 60)
+
         
