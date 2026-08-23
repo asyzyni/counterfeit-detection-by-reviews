@@ -1,0 +1,13 @@
+{
+  "file": " mutiara_xiami redmi.csv",
+  "product_id": "mutiara_xiami redmi",
+  "encoding": "utf-8",
+  "review_columns": [
+    "review"
+  ],
+  "timestamp_column": "timestamp",
+  "rows_input": 49,
+  "rows_output": 31,
+  "rows_removed": 18,
+  "parts": 1
+}

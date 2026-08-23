@@ -154,7 +154,7 @@ def detect_review_columns(
             )
 
     if review_columns:
-        review_columns
+        return review_columns
 
     for col in columns:
         col_lower = (
@@ -190,7 +190,7 @@ def detect_review_columns(
 
 def detect_timestamp_column(
     df: pd.DataFrame,
-    review_column: list[str],
+    review_columns: list[str],
 ) -> Optional[str]:
 
     normalized_columns = {
@@ -203,7 +203,7 @@ def detect_timestamp_column(
             "timestamp"
         ]
 
-    review_set = set(review_column)
+    review_set = set(review_columns)
 
     for col in df.columns:
         if col in review_set:
@@ -321,7 +321,7 @@ def clean_chunk(
     product_id: str, 
     source_file: str, 
     review_columns: list[str], 
-    timestamp_columns: Optional[str], 
+    timestamp_column: Optional[str], 
     row_offset: int = 0, 
     min_review_length: int = 2,
 ) -> pd.DataFrame: 
@@ -361,12 +361,12 @@ def clean_chunk(
     # timestamp 
 
     if (
-        timestamp_columns is not None and timestamp_columns in df.columns
+        timestamp_column is not None and timestamp_column in df.columns
     ): 
 
         df["timestamp"] = (
             clean_timestamp(
-                df[timestamp_columns]
+                df[timestamp_column]
             )
         )
 
@@ -445,7 +445,7 @@ class DataPreprocessor:
     # product output 
 
     def get_product_output_dir(
-        self, product_id: str, x
+        self, product_id: str, 
     ) -> Path: 
         safe_product_id = (
             make_safe_filename(
@@ -470,7 +470,7 @@ class DataPreprocessor:
     # clean single file 
 
     def clean_single_file(
-        self, filepath: Path, 
+    self, filepath: Path, 
     ) -> dict: 
         filepath = Path(
             filepath
@@ -579,7 +579,7 @@ class DataPreprocessor:
                 filepath, dtype=str, 
                 keep_default_na=False, 
                 chunksize=(
-                    self.config.chunksize 
+                    self.config.chunk_size 
                 ), 
                 encoding=encoding, 
             )
@@ -676,7 +676,7 @@ class DataPreprocessor:
                 with open(
                     meta_path, "w", encoding="utf-8", 
                 ) as file: 
-                    jso.dump(
+                    json.dump(
                         metadata, file, ensure_ascii=False, indent=2
                     )
 
