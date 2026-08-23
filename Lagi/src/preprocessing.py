@@ -724,4 +724,272 @@ class DataPreprocessor:
         except Exception as error: 
             # agar output tidak berhenti setengah jadi 
             if product_output_dir.exists():
-                shutil.rmtree
+                shutil.rmtree(
+                    product_output_dir
+                )
+
+            if done_marker.exists():
+                done_marker.unlink()
+            
+            return {
+                "file":
+                    filename,
+
+                "product_id":
+                    product_id,
+
+                "status":
+                    "failed",
+
+                "encoding":
+                    None,
+
+                "review_columns":
+                    None,
+
+                "timestamp_column":
+                    None,
+
+                "rows_input":
+                    None,
+
+                "rows_output":
+                    None,
+
+                "rows_removed":
+                    None,
+
+                "parts":
+                    None,
+
+                "error":
+                    str(error),
+            }
+
+        # save manifest (berfungsi untuk menyimpan progress processing)
+    def save_manifest(
+        self, results: list[dict], 
+    ) -> pd.DataFrame:
+
+        manifest = pd.DataFrame(
+            results
+        ) 
+
+        manifest.to_csv(
+            self.config.cleaning_manifest_path, 
+            index=False, 
+        ) 
+
+        return manifest 
+
+        # clean all 
+
+    def clean_all(
+        self, 
+    ) -> pd.DataFrame: 
+        
+        files = (
+            self.discover_files()
+        )
+
+        results = []
+
+        for filepath in tqdm(
+            files, desc="cleaning Files"
+            
+        ): 
+            result = (
+                self.clean_single_file(
+                    filepath
+                )
+            )
+
+            results.append(
+                result
+            )
+
+            self.save_manifest(
+                results
+                )
+
+            manifest = (
+                self.save_manifest(
+                    result
+                )
+            )
+
+            self.print_summary(
+                manifest
+            )
+
+            return manifest
+
+    # summary 
+    def print_summary(
+        self, manifest: pd.DataFrame,
+    ) -> None: 
+            
+        if manifest.empty:
+            print("manifest kosong")
+
+            return 
+
+        success_count = int(
+            manifest['status'].eq('success').sum()
+        )
+
+        skipped_count = int(
+            manifest['status'].eq('skipped').sum()
+        )
+
+        failed_count = int(
+            manifest['status'].eq('failed').sum()
+        )
+
+        processed = manifest[
+            manifest['status'].isin(['success', 'skipped'])
+        ].copy()
+
+        rows_input = pd.to_numeric(
+            processed[
+                "rows_output"
+            ], 
+            errors="coerce",
+        )
+
+        total_input = int(
+            rows_input.fillna(0).sum()
+        )
+
+        total_output = int(
+            rows_output.fillna(0).sum()
+        )
+
+        total_removed = (
+            total_input - total_output
+        )
+
+        print("Summary: ")
+        print(f"Success: {success_count}")
+        print(f"Skipped: {skipped_count}")
+        print(f"Failed: {failed_count}")
+        print(f"Total input: {total_input}")
+        print(f"Total output: {total_output}")
+        print(f"Total removed: {total_removed}")
+
+        if total_input > 0:
+            removed_percentage = (
+                total_removed / total_input * 100
+            )
+
+            print(f"Removed_percentage: {removed_percentage:.2f}%")
+                
+        print()
+        print("Manifest:")
+
+        print(self.config.cleaning_manifest_path) 
+
+        # failed files 
+
+        if failed_count > 0: 
+            print()
+            print(f"\nFailed Files: {failed_count}")
+            failed = manifest[
+                manifest['status'] == 'failed'
+            ]
+
+            for _, row in (
+                failed.head(10).iterrows()
+            ): 
+                print(f"- {row['file']}")
+                print(f"{row['error']}")
+
+            if failed_count > 10: 
+                print(
+                    f"{failed_count - 10:,} more failed files..."
+                )
+            
+    def get_cleaned_files(
+        self, 
+    ) -> list[Path]: 
+        return sorted(
+            self.config.cleaned_dir.rglob(
+                "*.parquet"
+            )
+        )
+
+    def get_cleaned_files(
+        self, 
+    ) -> pd.DataFrame: 
+        path = (
+            self.config.cleaning_manifest_path
+        )
+
+        if not path.exists():
+            raise FileNotFoundError(
+                "Cleaning manifest belum tersedia"
+            )
+
+        manifest = pd.read_csv(
+            path
+        )
+        
+        return (
+            manifest[manifest['status'] == 'failed'].reset_index(drop=True)
+        )
+
+## Quality Check 
+def inspect_cleaned_data(
+    cleaned_dir: Path, 
+    sample_files: int = 10, 
+    random_state: int = 42,
+) ->[dict, pd.DataFrame]: 
+
+    cleaned_dir = Path(
+        cleaned_dir
+    )
+
+    parquet_files = sorted(
+        cleaned_dir.rglob(
+            "*.parquet"
+        )
+    )
+
+    if not parquet_files: 
+        raise FileNotFoundError(
+            f"there's no parquet in {cleaned_dir}"
+        )
+
+    # sampling file 
+    rng = np.random.default_rng(
+        random_state
+    )
+
+    sample_size = min(
+        sample_files, len(parquet_files)
+    )
+
+    indices = rng.choice(
+        len(parquet_files), size=sample_size, replace=False, 
+    )
+
+    samples = []
+
+    for filepath in selected_files:
+        df = pd.read_parquet(filepath)
+
+       if not df.empty:
+        samples.append(
+            df
+        )
+
+    if not samples:
+        raise ValueError("there's no data in parquet")
+
+    sample = pd.concat(
+        samples, ignore_index=True
+
+    )
+
+    return sample
+        
