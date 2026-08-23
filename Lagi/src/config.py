@@ -68,7 +68,7 @@ class ExperimentConfig:
     
     @property 
     def cleaned_dir(self) -> Path: 
-        return.self.output_dir / "cleaned"
+        return self.output_dir / "cleaned"
 
     @property 
     def labels_dir(self) -> Path:
@@ -221,7 +221,7 @@ class ExperimentConfig:
                 "sentiment_batch size must more than zero"
             )
         
-        if sentiment_max_length <=:
+        if self.sentiment_max_length <= 0:
             raise ValueError (
                 "sentiment_max_length must more than zero"
             )

@@ -1,8 +1,9 @@
+from __future__ import annotations 
 from numpy import sort
 from posixpath import sep
 from numpy import average
 from typing_extensions import runtime
-from __future__ import annotations 
+
 
 from pathlib import Path 
 from typing import Optional 
@@ -118,7 +119,7 @@ def detect_review_columns(
     columns = list(df.columns)
 
     normalized_columns = {
-        str(col).lower().strip(); col 
+        str(col).lower().strip(): col 
         for col in columns
     }
 
@@ -242,7 +243,7 @@ def normalize_text_series(
 
     result = (
         result.str.replace(
-            r"\s+", " ". regex=True
+            r"\s+", " ", regex=True
         ).str.strip()
     )
 
@@ -320,7 +321,7 @@ def clean_chunk(
     product_id: str, 
     source_file: str, 
     review_columns: list[str], 
-    timestamp_columns: Optional[str]. 
+    timestamp_columns: Optional[str], 
     row_offset: int = 0, 
     min_review_length: int = 2,
 ) -> pd.DataFrame: 
@@ -978,10 +979,10 @@ def inspect_cleaned_data(
     for filepath in selected_files:
         df = pd.read_parquet(filepath)
 
-       if not df.empty:
-        samples.append(
-            df
-        )
+        if not df.empty:
+            samples.append(
+                df
+            )
 
     if not samples:
         raise ValueError("there's no data in parquet")
