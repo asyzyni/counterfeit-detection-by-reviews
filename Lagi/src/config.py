@@ -19,6 +19,12 @@ class ExperimentConfig:
 
     random_state: int = 42
 
+    overwrite: bool = False
+
+    sentiment_base_model: str =(
+        "indobenchmark/indobert-base-p1"
+    )
+
 
     # =========================================================
     # PREPROCESSING
@@ -245,3 +251,44 @@ class ExperimentConfig:
 
         self.validate()
         self.create_directories()
+    
+    # =========================
+    # Sentiment / IndoBERT
+    # =========================
+
+    sentiment_base_model: str = (
+        "indobenchmark/indobert-base-p1"
+    )
+
+    sentiment_max_length: int = 256
+
+    sentiment_train_batch_size: int = 16
+
+    sentiment_eval_batch_size: int = 32
+
+    sentiment_learning_rate: float = 2e-5
+
+    sentiment_weight_decay: float = 0.01
+
+    sentiment_num_epochs: int = 3
+
+    sentiment_warmup_ratio: float = 0.1
+
+    random_seed: int = 42
+
+    @property
+    def sentiment_model_dir(self) -> Path:
+        return (
+            self.base_dir
+            / "models"
+            / "indobert_sentiment_smsa"
+        )
+
+    @property
+    def smsa_dir(self) -> Path:
+        return (
+            self.base_dir
+            / "data"
+            / "external"
+            / "smsa"
+        )
