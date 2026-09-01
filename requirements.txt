@@ -1,0 +1,11 @@
+numpy>=1.22.0
+pandas>=1.4.0
+torch>=2.0.0
+transformers>=4.30.0
+datasets>=2.12.0
+accelerate>=0.20.0
+scikit-learn>=1.0.0
+hmmlearn>=0.3.0
+tqdm>=4.64.0
+pyarrow>=10.0.0
+jupyter>=1.0.0
