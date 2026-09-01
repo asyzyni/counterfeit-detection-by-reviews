@@ -20,7 +20,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from src.config import ExperimentConfig 
+from .config import ExperimentConfig 
 
 ## Mapping Label 
 
@@ -126,7 +126,7 @@ class IndoBERTSentimentTrainer:
         df: pd.DataFrame,
     ): 
 
-        dataset = HFDataset.from_pandas(
+        dataset = Dataset.from_pandas(
             df[
                 ['text', 'label_id']
             ], preserve_index=False,
@@ -137,7 +137,7 @@ class IndoBERTSentimentTrainer:
         )
 
         dataset = dataset.map(
-            self._tokenize, batched=True
+            self._tokenize, batched=True, remove_columns=['text'], 
         )
 
         return dataset

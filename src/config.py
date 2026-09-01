@@ -10,10 +10,10 @@ class ExperimentConfig:
     # PROJECT
     # =========================================================
 
-    base_dir: Path("/Users/asyzyni/Desktop/TA /Kode dan Eksperimen/Kode TA/Lagi")
+    base_dir: Path = Path(__file__).resolve().parent.parent
 
-    # Folder data mentah boleh berada di luar project
-    raw_data_dir: Path | None = Path("/Users/asyzyni/Desktop/TA /Kode dan Eksperimen/Kode TA/data")
+    # Folder data mentah
+    raw_data_dir: Path | None = Path(__file__).resolve().parent.parent / "data" / "raw"
 
     experiment_name: str = "Percobaan I"
 
