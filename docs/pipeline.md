@@ -113,3 +113,39 @@ apakah menambah daya prediksi di atas statistik sentimen statis.
 - **Representasi observasi HMM**: probabilitas softmax IndoBERT hidup di simpleks (jumlah = 1), sehingga Gaussian HMM berkovarians penuh berisiko singular. Pertimbangkan logit pra-softmax atau transformasi log-ratio (Aitchison) sebagai observasi.
 - **Kalibrasi softmax IndoBERT**: jaringan modern cenderung *overconfident* (Guo et al. 2017); pertimbangkan temperature scaling sebelum skor dipakai sebagai observasi HMM.
 - **Ukuran dan sumber sampel validasi eksternal (9B)**: makin penting sekarang karena ini satu-satunya pengangan di luar teks ulasan itu sendiri.
+
+-- 
+
+## Strutkur File 
+
+src/
+├── __init__.py
+├── config.py
+├── preprocess.py
+├── sentiment.py
+│
+├── split.py            # berikutnya
+│
+├── features/
+│   ├── __init__.py
+│   ├── tfidf.py
+│   └── lexicon.py
+│
+├── temporal/
+│   ├── __init__.py
+│   └── hmm.py
+│
+├── models/
+│   ├── __init__.py
+│   ├── model_a.py
+│   ├── model_b.py
+│   └── model_c.py
+│
+├── evaluation/
+│   ├── __init__.py
+│   └── evaluator.py
+│
+├── export.py
+└── pipeline/
+    ├── __init__.py
+    └── experiment.py
