@@ -858,6 +858,10 @@ class DataPreprocessor:
             errors="coerce",
         )
 
+        rows_output = pd.to_numeric(
+            processed['rows_input'], errors="coerce"
+        )
+
         total_input = int(
             rows_input.fillna(0).sum()
         )
@@ -909,15 +913,6 @@ class DataPreprocessor:
                 print(
                     f"{failed_count - 10:,} more failed files..."
                 )
-            
-    def get_cleaned_files(
-        self, 
-    ) -> list[Path]: 
-        return sorted(
-            self.config.cleaned_dir.rglob(
-                "*.parquet"
-            )
-        )
 
     def get_cleaned_files(
         self, 
@@ -944,7 +939,7 @@ def inspect_cleaned_data(
     cleaned_dir: Path, 
     sample_files: int = 10, 
     random_state: int = 42,
-) ->[dict, pd.DataFrame]: 
+) -> tuple[dict, pd.DataFrame]: 
 
     cleaned_dir = Path(
         cleaned_dir

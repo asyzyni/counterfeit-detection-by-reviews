@@ -1,5 +1,5 @@
-from typing_extensions import runtime
 from __future__ import annotations 
+from typing_extensions import runtime
 from typing import Any
 
 
@@ -12,12 +12,12 @@ import pandas as pd
 class SplitResult: 
     train: pd.DataFrame 
     validation: pd.DataFrame
-    testL pd.DataFrame 
+    test : pd.DataFrame 
 
 
 class ProductSplitter: 
     def __init__(
-        selfm 
+        self,
         config: Any | None = None, 
         *, 
         product_col: str = "product_id", 
