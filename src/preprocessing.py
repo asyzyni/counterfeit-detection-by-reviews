@@ -1,19 +1,15 @@
-from __future__ import annotations 
-from numpy import sort
-from posixpath import sep
-from numpy import average
-from typing_extensions import runtime
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
 
-from pathlib import Path 
-from typing import Optional 
-import json 
-import re 
-import shutil 
+import json
+import re
+import shutil
 
-import numpy as np 
-import pandas as pd 
-from tqdm.auto import tqdm 
+import numpy as np
+import pandas as pd
+from tqdm.auto import tqdm
 
 from .config import ExperimentConfig 
 
@@ -470,8 +466,10 @@ class DataPreprocessor:
     # clean single file 
 
     def clean_single_file(
-    self, filepath: Path, 
+        self, 
+        filepath: Path, 
     ) -> dict: 
+        
         filepath = Path(
             filepath
         ) 
@@ -502,7 +500,9 @@ class DataPreprocessor:
 
         # resume 
         if (
-            done_marker.exists() and meta_path.exists() and not self.config.overwrite 
+            done_marker.exists() 
+            and meta_path.exists() 
+            and not self.config.overwrite 
         ): 
 
             try:
@@ -576,7 +576,8 @@ class DataPreprocessor:
             # chunk reader 
 
             reader = pd.read_csv(
-                filepath, dtype=str, 
+                filepath, 
+                dtype=str, 
                 keep_default_na=False, 
                 chunksize=(
                     self.config.chunk_size 
@@ -589,23 +590,19 @@ class DataPreprocessor:
             for chunk in reader: 
                 input_rows = (len(chunk)) 
 
-                total_input += (
-                    input_rows
-                )
+                total_input += input_rows
 
                 cleaned = clean_chunk(
-                    df=chunk, product_id=product_id, 
-                    source_file=filename, review_columns=review_columns, 
+                    df=chunk, 
+                    product_id=product_id, 
+                    source_file=filename, 
+                    review_columns=review_columns, 
                     timestamp_column=timestamp_column, 
                     row_offset = row_offset, 
-                    min_review_length=(
-                        self.config.min_review_length
-                    ), 
+                    min_review_length=self.config.min_review_length, 
                 )
 
-                row_offset += (
-                    input_rows
-                )
+                row_offset += input_rows
 
                 if cleaned.empty:
                     continue
@@ -614,10 +611,7 @@ class DataPreprocessor:
                     len(cleaned)
                 )
 
-                total_output += (
-                    output_rows
-                )
-
+                total_output += output_path
                 # save parquet 
 
                 output_path = (
@@ -627,7 +621,8 @@ class DataPreprocessor:
                 )
 
                 cleaned.to_parquet(
-                    output_path, index=False, 
+                    output_path, 
+                    index=False, 
                     compression=(
                         self.config.parquet_compression
                     ), 
@@ -637,9 +632,7 @@ class DataPreprocessor:
 
                 del cleaned 
 
-                rows_removed = (
-                    total_input - total_output
-                )
+                rows_removed = total_input - total_output
 
                 # metadata 
 
@@ -674,10 +667,15 @@ class DataPreprocessor:
                 }
 
                 with open(
-                    meta_path, "w", encoding="utf-8", 
+                    meta_path, 
+                    "w", 
+                    encoding="utf-8", 
                 ) as file: 
                     json.dump(
-                        metadata, file, ensure_ascii=False, indent=2
+                        metadata, 
+                        file, 
+                        ensure_ascii=False, 
+                        indent=2, 
                     )
 
                 # Checkpoint 
@@ -796,7 +794,8 @@ class DataPreprocessor:
         results = []
 
         for filepath in tqdm(
-            files, desc="cleaning Files"
+            files, 
+            desc="cleaning Files"
             
         ): 
             result = (
@@ -853,13 +852,13 @@ class DataPreprocessor:
 
         rows_input = pd.to_numeric(
             processed[
-                "rows_output"
+                "rows_input"
             ], 
             errors="coerce",
         )
 
         rows_output = pd.to_numeric(
-            processed['rows_input'], errors="coerce"
+            processed['rows_output'], errors="coerce"
         )
 
         total_input = int(
@@ -968,6 +967,11 @@ def inspect_cleaned_data(
     indices = rng.choice(
         len(parquet_files), size=sample_size, replace=False, 
     )
+    
+    selected_files = [
+        parquet_files[i]
+        for i in indices
+    ]
 
     samples = []
 
@@ -986,6 +990,38 @@ def inspect_cleaned_data(
         samples, ignore_index=True
 
     )
+    
+    report = {
+        "total_parquet_files": len(parquet_files),
+        "sampled_parquet_files": len(selected_files),
+        "sampled_rows": len(sample),
+        "unique_products": (
+            sample["product_id"].nunique()
+            if "product_id" in sample.columns
+            else None
+        ),
+        "missing_review": (
+            int(sample["review"].isna().sum())
+            if "review" in sample.columns
+            else None
+        ),
+        "missing_timestamp": (
+            int(sample["timestamp"].isna().sum())
+            if "timestamp" in sample.columns
+            else None
+        ),
+        
+        "valid_timestamp_ratio": (
+            float(sample['timestamp'].notna().mean())
+            if "timestamp" in sample.columns 
+            else None
+        )
+        "duplicate_review_id": (
+            int(sample["review_id"].duplicated().sum())
+            if "review_id" in sample.columns
+            else None
+        ),
+    }
 
-    return sample
+    return report, sample
         
