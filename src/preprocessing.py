@@ -223,24 +223,73 @@ def detect_timestamp_column(
 def normalize_text_series(
     series: pd.Series,
 ) -> pd.Series:
+
     result = (
-        series.astype("string").fillna("").str.strip()
+        series
+        .astype("string")
+        .fillna("")
+        .str.strip()
     )
 
+    # ------------------------------------------
+    # NULL-LIKE TEXT
+    # ------------------------------------------
+
     null_mask = (
-        result.str.lower().isin(NULL_TEXT_VALUES)
+        result
+        .str.lower()
+        .isin(NULL_TEXT_VALUES)
     )
 
     result = result.mask(
-        null_mask, ""
+        null_mask,
+        "",
     )
 
-    ## WHITESPACE 
+    # ------------------------------------------
+    # REMOVE HTML
+    # ------------------------------------------
+
+    result = result.str.replace(
+        r"<[^>]+>",
+        " ",
+        regex=True,
+    )
+
+    # ------------------------------------------
+    # REMOVE URL
+    # ------------------------------------------
+
+    result = result.str.replace(
+        r"(?:https?://|www\.)\S+",
+        " ",
+        regex=True,
+    )
+
+    # ------------------------------------------
+    # NORMALIZE REPEATED CHARACTERS
+    #
+    # baguuuusss -> baguuss
+    # ------------------------------------------
+
+    result = result.str.replace(
+        r"(.)\1{2,}",
+        r"\1\1",
+        regex=True,
+    )
+
+    # ------------------------------------------
+    # WHITESPACE
+    # ------------------------------------------
 
     result = (
-        result.str.replace(
-            r"\s+", " ", regex=True
-        ).str.strip()
+        result
+        .str.replace(
+            r"\s+",
+            " ",
+            regex=True,
+        )
+        .str.strip()
     )
 
     return result
@@ -324,9 +373,14 @@ def clean_chunk(
     
     if df.empty:
         return pd.DataFrame(
-            columns=[
-                "review_id", "product_id", "review", "timestamp", 
-                "row_order", "source_file"
+            columns = [
+                "review_id",
+                "product_id",
+                "review",
+                "text_light",
+                "timestamp",
+                "row_order",
+                "source_file",
             ]
         )
     
@@ -353,6 +407,8 @@ def clean_chunk(
             review_columns=review_columns,
         )
     )
+    
+    df["text_light"] = df["review"]
 
     # timestamp 
 
@@ -384,7 +440,19 @@ def clean_chunk(
     df = df[
         valid_review_mask
     ].copy()
-
+    
+    # Exact duplicate review dalam produk yang sama
+    df = (
+        df
+        .drop_duplicates(
+            subset=[
+                "product_id",
+                "review",
+            ],
+            keep="first",
+        )
+        .copy()
+    )
 
     # source file 
 
@@ -587,19 +655,21 @@ class DataPreprocessor:
 
             # process chunk 
 
-            for chunk in reader: 
-                input_rows = (len(chunk)) 
+            # process chunk
+
+            for chunk in reader:
+                input_rows = len(chunk)
 
                 total_input += input_rows
 
                 cleaned = clean_chunk(
-                    df=chunk, 
-                    product_id=product_id, 
-                    source_file=filename, 
-                    review_columns=review_columns, 
-                    timestamp_column=timestamp_column, 
-                    row_offset = row_offset, 
-                    min_review_length=self.config.min_review_length, 
+                    df=chunk,
+                    product_id=product_id,
+                    source_file=filename,
+                    review_columns=review_columns,
+                    timestamp_column=timestamp_column,
+                    row_offset=row_offset,
+                    min_review_length=self.config.min_review_length,
                 )
 
                 row_offset += input_rows
@@ -607,118 +677,75 @@ class DataPreprocessor:
                 if cleaned.empty:
                     continue
 
-                output_rows = (
-                    len(cleaned)
-                )
-
-                total_output += output_path
-                # save parquet 
+                output_rows = len(cleaned)
+                total_output += output_rows
 
                 output_path = (
-                    product_output_dir / (
-                        f"part_{part_number:06d}.parquet"
-                    )
+                    product_output_dir
+                    / f"part_{part_number:06d}.parquet"
                 )
 
                 cleaned.to_parquet(
-                    output_path, 
-                    index=False, 
-                    compression=(
-                        self.config.parquet_compression
-                    ), 
+                    output_path,
+                    index=False,
+                    compression=self.config.parquet_compression,
                 )
 
-                part_number += 1 
+                part_number += 1
 
-                del cleaned 
+                del cleaned
 
-                rows_removed = total_input - total_output
 
-                # metadata 
+# ==========================================
+# SEMUA CHUNK SUDAH SELESAI
+# ==========================================
 
-                metadata = {
-                    "file":
-                        filename,
+            rows_removed = (
+                total_input - total_output
+            )
 
-                    "product_id":
-                        product_id,
+            metadata = {
+                "file": filename,
+                "product_id": product_id,
+                "encoding": encoding,
+                "review_columns": review_columns,
+                "timestamp_column": timestamp_column,
+                "rows_input": int(total_input),
+                "rows_output": int(total_output),
+                "rows_removed": int(rows_removed),
+                "parts": int(part_number),
+            }
 
-                    "encoding":
-                        encoding,
+            with open(
+                meta_path,
+                "w",
+                encoding="utf-8",
+            ) as file:
+                json.dump(
+                    metadata,
+                    file,
+                    ensure_ascii=False,
+                    indent=2,
+                )
 
-                    "review_columns":
-                        review_columns,
+            # Baru tandai selesai setelah SEMUA chunk selesai
+            done_marker.touch()
 
-                    "timestamp_column":
-                        timestamp_column,
-
-                    "rows_input":
-                        int(total_input),
-
-                    "rows_output":
-                        int(total_output),
-
-                    "rows_removed":
-                        int(rows_removed),
-
-                    "parts":
-                        int(part_number),
-
-                }
-
-                with open(
-                    meta_path, 
-                    "w", 
-                    encoding="utf-8", 
-                ) as file: 
-                    json.dump(
-                        metadata, 
-                        file, 
-                        ensure_ascii=False, 
-                        indent=2, 
-                    )
-
-                # Checkpoint 
-                done_marker.touch() 
-
-                # return 
-                return {
-                     "file":
-                        filename,
-
-                    "product_id":
-                        product_id,
-
-                    "status":
-                        "success",
-
-                    "encoding":
-                        encoding,
-
-                    "review_columns":
-                        "|".join(
-                            review_columns
-                        ),
-
-                    "timestamp_column":
-                        timestamp_column,
-
-                    "rows_input":
-                        int(total_input),
-
-                    "rows_output":
-                        int(total_output),
-
-                    "rows_removed":
-                        int(rows_removed),
-
-                    "parts":
-                        int(part_number),
-
-                    "error":
-                        None,
-                }
-        
+            return {
+                "file": filename,
+                "product_id": product_id,
+                "status": "success",
+                "encoding": encoding,
+                "review_columns": "|".join(
+                    review_columns
+                ),
+                "timestamp_column": timestamp_column,
+                "rows_input": int(total_input),
+                "rows_output": int(total_output),
+                "rows_removed": int(rows_removed),
+                "parts": int(part_number),
+                "error": None,
+            }
         # Error hadnling 
         except Exception as error: 
             # agar output tidak berhenti setengah jadi 
@@ -784,45 +811,42 @@ class DataPreprocessor:
         # clean all 
 
     def clean_all(
-        self, 
-    ) -> pd.DataFrame: 
-        
-        files = (
-            self.discover_files()
-        )
+        self,
+    ) -> pd.DataFrame:
+
+        files = self.discover_files()
 
         results = []
 
         for filepath in tqdm(
-            files, 
-            desc="cleaning Files"
-            
-        ): 
+            files,
+            desc="Cleaning Files",
+        ):
             result = (
                 self.clean_single_file(
                     filepath
                 )
             )
 
-            results.append(
-                result
-            )
+            results.append(result)
 
+            # checkpoint manifest setelah setiap file
             self.save_manifest(
                 results
-                )
-
-            manifest = (
-                self.save_manifest(
-                    result
-                )
             )
 
-            self.print_summary(
-                manifest
+        # final manifest
+        manifest = (
+            self.save_manifest(
+                results
             )
+        )
 
-            return manifest
+        self.print_summary(
+            manifest
+        )
+
+        return manifest
 
     # summary 
     def print_summary(
@@ -930,7 +954,12 @@ class DataPreprocessor:
         )
         
         return (
-            manifest[manifest['status'] == 'failed'].reset_index(drop=True)
+            manifest[
+                manifest["status"].isin(
+                    ["success", "skipped"]
+            )
+        ]
+        .reset_index(drop=True)
         )
 
 ## Quality Check 
@@ -1015,7 +1044,7 @@ def inspect_cleaned_data(
             float(sample['timestamp'].notna().mean())
             if "timestamp" in sample.columns 
             else None
-        )
+        ), 
         "duplicate_review_id": (
             int(sample["review_id"].duplicated().sum())
             if "review_id" in sample.columns
