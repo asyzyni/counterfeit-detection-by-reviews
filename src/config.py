@@ -78,6 +78,7 @@ class ExperimentConfig:
     
     sentiment_model_name: str | None = None
     sentiment_batch_size: int = 32
+    sentiment_max_length: int = 128
 
 
     # =========================================================
