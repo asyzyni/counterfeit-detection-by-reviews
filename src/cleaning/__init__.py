@@ -2,3 +2,7 @@
 
 Jalankan: python -m src.cleaning.run
 """
+
+from .loader import load_clean_reviews
+
+__all__ = ["load_clean_reviews"]

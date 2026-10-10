@@ -22,8 +22,9 @@ class CleaningConfig:
     mapping_filename: str = "pemetaan_file_toko_produk.csv"
     mapping_encoding: str = "utf-8-sig"
 
-    # Folder output BARU. Run akan berhenti bila folder ini sudah ada.
-    output_dir: Path = _REPO_DIR / "outputs" / "cleaning_beneran"
+    # Folder output. Run berhenti bila folder ini sudah berisi file
+    # (folder kosong boleh, karena ExperimentConfig.setup() membuatnya).
+    output_dir: Path = _REPO_DIR / "outputs" / "cleaned"
 
     # Jumlah baris pemetaan & status "ok" yang diharapkan.
     # None = tidak diperiksa (dipakai tes / data scrape ulang).

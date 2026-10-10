@@ -294,8 +294,16 @@ def test_export_tabel_contoh_anonim(raw_dir: Path, tmp_path: Path) -> None:
 def test_run_refuses_existing_output(raw_dir: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
     out.mkdir()
+    (out / "hasil_lama.parquet").write_bytes(b"x")
 
     assert run(make_config(raw_dir, out)) == EXIT_STOPPED
+
+
+def test_run_accepts_empty_output_dir(raw_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+
+    assert run(make_config(raw_dir, out)) == EXIT_OK
 
 
 def test_run_is_deterministic(raw_dir: Path, tmp_path: Path) -> None:

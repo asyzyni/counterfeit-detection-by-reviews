@@ -57,7 +57,7 @@ def write_outputs(
     output_dir = Path(config.output_dir)
     reports = config.reports_dir
 
-    output_dir.mkdir(parents=True, exist_ok=False)
+    output_dir.mkdir(parents=True, exist_ok=True)
     reports.mkdir()
 
     result.reviews.to_parquet(
@@ -219,8 +219,9 @@ def run(
 
     config.validate()
 
-    if Path(config.output_dir).exists():
-        print(f"BERHENTI: folder output sudah ada: {config.output_dir}")
+    output_dir = Path(config.output_dir)
+    if output_dir.exists() and any(output_dir.iterdir()):
+        print(f"BERHENTI: folder output sudah berisi file: {output_dir}")
         return EXIT_STOPPED
 
     try:

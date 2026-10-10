@@ -1,7 +1,7 @@
 # Laporan Cleaning — Data Beneran → tabel review RM 1
 
 Run: 2026-10-09 · Kode: `src/cleaning/` · Perintah: `python -m src.cleaning.run`
-Output: `outputs/cleaning_beneran/reviews_clean.parquet` + `outputs/cleaning_beneran/reports/`
+Output: `outputs/cleaned/reviews_clean.parquet` + `outputs/cleaned/reports/`
 
 Tahap ini hanya cleaning/preprocessing. Tidak ada label, skor kecurigaan, atau sentimen.
 Folder `Data Beneran` hanya dibaca. Tidak ada file lama yang diubah.
@@ -179,7 +179,7 @@ Diverifikasi dengan memanggil fungsi lama secara hanya-baca terhadap 403 file. P
 
 ---
 
-## 5. File output (`outputs/cleaning_beneran/`)
+## 5. File output (`outputs/cleaned/`)
 
 | File | Isi |
 |---|---|
@@ -195,11 +195,53 @@ Diverifikasi dengan memanggil fungsi lama secara hanya-baca terhadap 403 file. P
 | `reports/timestamp_formats.csv` | pola timestamp per keluarga skema + status |
 | `reports/excluded_files.csv`, `validation_checks.csv`, `output_hashes.csv`, `tabel_contoh*.csv` | — |
 
-Menjalankan ulang (folder output harus belum ada):
+Keluaran cleaning berupa **satu tabel** `"outputs/cleaned/reviews_clean.parquet"`
+dan folder laporan `"outputs/cleaned/reports/"`. Tidak ada lagi folder per produk,
+`part_*.parquet`, atau `_meta.json` pada format baru. Pintu masuk resmi untuk
+membaca tabel ini adalah `load_clean_reviews`:
+
+```python
+from src.cleaning import load_clean_reviews
+
+reviews = load_clean_reviews()
+semua_reviews = load_clean_reviews(only_included=False)
+sampel = load_clean_reviews(columns=["nama_toko", "seq_in_product"]).head(3)
+# Untuk lokasi khusus, gunakan path file atau CleaningConfig(output_dir=...).
+reviews_lain = load_clean_reviews(path="outputs/cleaned_v2/reviews_clean.parquet")
+```
+
+Secara bawaan hanya baris `include_for_inference == True` yang dikembalikan.
+Kedua mode diurutkan menurut `product_id`, lalu `seq_in_product`; indeks direset,
+tetapi nomor urut asli, tipe kolom, dan timestamp `NaT` dipertahankan.
+`columns=None` mengembalikan semua kolom. Jika `columns` diberikan, empat kolom
+kontrak inferensi (`review_id`, `product_id`, `text_light`, `timestamp`) tetap
+disertakan. `config` menerima `CleaningConfig`; `path` mengalahkan lokasi dalam
+konfigurasi. File yang tidak tersedia menghasilkan `FileNotFoundError` yang
+menjelaskan lokasi dan perintah cleaning. Loader hanya membaca hasil yang ada.
+
+`DataPreprocessor` sudah digantikan oleh `src.cleaning`. Untuk folder yang
+berisi `reviews_clean.parquet`, `clean_single_file()` menolak penulisan dengan
+pesan `format baru terdeteksi; pakai python -m src.cleaning.run`; penolakan ini
+juga diteruskan oleh `clean_all()` saat memanggil fungsi tersebut, termasuk
+ketika `overwrite=True`. `get_cleaned_files()` dan `inspect_cleaned_data()`
+menolak format baru dengan petunjuk memakai `src.cleaning.load_clean_reviews()`.
+Perilaku format lama tetap tersedia jika file tunggal tersebut tidak ada.
+
+Pemeriksaan 2026-10-10 menemukan 593 file `.done` dan tidak ada isi lain di
+`"outputs/checkpoints/cleaning/"`. Setelah memastikan kode `src/cleaning` tidak
+membaca atau menulis checkpoint tersebut, semua penanda dihapus per file:
+**593 sebelum → 0 sesudah**, tanpa pemindahan ke `_to_delete/`. Skip pada kode
+lama sebenarnya mensyaratkan `.done` sekaligus `_meta.json`; `get_cleaned_files`
+membaca manifest lama, sedangkan `inspect_cleaned_data` menelusuri parquet.
+Tidak ditemukan pembaca format per produk di notebook atau modul lain yang
+memerlukan perubahan desain. `RM1_execution_report.md` dan `docs/audit_pipeline.md`
+masih memuat uraian historis pipeline lama; keduanya di luar lingkup pembaruan ini.
+
+Menjalankan ulang (folder output harus kosong atau belum ada; isi lama `outputs/cleaned` dari run 2026-10-03 sudah dihapus atas permintaan Asyifa):
 
 ```
-python -m src.cleaning.run --output-dir outputs/cleaning_beneran_v2 \
-    [--aspect-tag-vocab reports/aspect_tag_candidates.csv] \
+python -m src.cleaning.run --output-dir "outputs/cleaned_v2" \
+    [--aspect-tag-vocab "reports/aspect_tag_candidates.csv"] \
     [--exclude-duplicate-file-groups] [--allow-date-only-technical-dup] [--no-nfkc] \
     [--raw-dir "/path/data baru" --expected-mapping-rows none --expected-ok-files none]
 ```

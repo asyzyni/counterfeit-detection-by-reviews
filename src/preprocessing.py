@@ -615,6 +615,7 @@ def clean_chunk(
 # ============================================================
 
 class DataPreprocessor:
+    """Pipeline lama per produk; sudah digantikan oleh modul src.cleaning."""
 
     def __init__(
         self,
@@ -702,6 +703,12 @@ class DataPreprocessor:
         self,
         filepath: Path,
     ) -> dict:
+        """Cleaning lama; pengaman ini juga berlaku saat dipanggil clean_all."""
+
+        if (self.config.cleaned_dir / "reviews_clean.parquet").exists():
+            raise RuntimeError(
+                "format baru terdeteksi; pakai python -m src.cleaning.run"
+            )
 
         filepath = Path(
             filepath
@@ -1294,6 +1301,13 @@ class DataPreprocessor:
     def get_cleaned_files(
         self,
     ) -> pd.DataFrame:
+        """Baca manifest lama; tabel baru dibaca lewat src.cleaning.load_clean_reviews."""
+
+        if (self.config.cleaned_dir / "reviews_clean.parquet").exists():
+            raise RuntimeError(
+                "format baru terdeteksi; gunakan src.cleaning.load_clean_reviews() "
+                "untuk membaca reviews_clean.parquet"
+            )
 
         path = (
             self.config.cleaning_manifest_path
@@ -1337,10 +1351,17 @@ def inspect_cleaned_data(
     sample_files: int = 10,
     random_state: int = 42,
 ) -> tuple[dict, pd.DataFrame]:
+    """Inspeksi format lama; format baru memakai src.cleaning.load_clean_reviews."""
 
     cleaned_dir = Path(
         cleaned_dir
     )
+
+    if (cleaned_dir / "reviews_clean.parquet").exists():
+        raise RuntimeError(
+            "format baru terdeteksi; gunakan src.cleaning.load_clean_reviews() "
+            "untuk membaca reviews_clean.parquet"
+        )
 
     parquet_files = sorted(
         cleaned_dir.rglob(
