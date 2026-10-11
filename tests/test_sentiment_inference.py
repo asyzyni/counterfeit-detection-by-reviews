@@ -11,6 +11,8 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
@@ -27,6 +29,7 @@ class FakeTokenizer:
     def __init__(self, model_max_length=128):
         self.model_max_length = model_max_length
         self.seen_lengths = []
+        self.batch_calls = []
 
     @staticmethod
     def _ids(text):
@@ -42,6 +45,7 @@ class FakeTokenizer:
             rows.append(ids)
         if return_tensors != "np":
             return {"input_ids": rows}
+        self.batch_calls.append((truncation, padding, max_length, [len(row) for row in rows]))
         width = max(len(r) for r in rows)
         input_ids = np.zeros((len(rows), width), dtype=np.int64)
         mask = np.zeros((len(rows), width), dtype=np.int64)
@@ -70,9 +74,37 @@ def make_bundle(indices=None, tokenizer=None, batch_size=4, bad=None):
 
     return si.SentimentBundle(
         tokenizer=tokenizer, forward=forward, sentiment_indices=indices,
-        device="cpu", max_length=128, batch_size=batch_size,
+        device="cpu", max_length=512, batch_size=batch_size,
         meta={"id2label": {0: "negatif", 1: "netral", 2: "positif"}, "device": "cpu"},
     ), table
+
+
+def make_semantic_bundle(swapped=False, neutral_fails=False, tokenizer=None):
+    """Tiga urutan ID tetap untuk tes; tidak memakai bobot model nyata."""
+    bundle, _ = make_bundle(tokenizer=tokenizer)
+    base_forward = bundle.forward
+    # Fixture independen dari konstanta kode agar perubahan kalimat terdeteksi.
+    fixtures = (
+        (2, "Barangnya bagus banget, sesuai deskripsi, pengiriman cepat"),
+        (1, "Barang sudah sampai, belum saya coba"),
+        (0, "Barang rusak, tidak sesuai foto, kecewa berat"),
+    )
+    expected = {tuple(FakeTokenizer._ids(text)): label for label, text in fixtures}
+
+    def forward(batch):
+        logits = base_forward(batch)
+        for i, (ids, mask) in enumerate(zip(batch["input_ids"], batch["attention_mask"])):
+            key = tuple(ids[mask.astype(bool)])
+            if key in expected:
+                target = expected[key]
+                if neutral_fails and target == 1:
+                    target = 2
+                logits[i] = -2.0
+                logits[i, target] = 2.0
+        return logits[:, [2, 1, 0]] if swapped else logits
+
+    bundle.forward = forward
+    return bundle
 
 
 def softmax(x):
@@ -129,11 +161,28 @@ class LabelMappingTests(unittest.TestCase):
 
 class TokenizerAndDeviceTests(unittest.TestCase):
     def test_tokenizer_check(self):
-        self.assertTrue(si.check_tokenizer(FakeTokenizer(128), 128))
-        with self.assertRaises(si.ModelCheckError):
-            si.check_tokenizer(FakeTokenizer(int(1e30)), 128)
-        with self.assertLogs(si.LOGGER, level="WARNING"):
-            self.assertFalse(si.check_tokenizer(FakeTokenizer(int(1e30)), 128, strict=False))
+        for length in (128, 512, int(1e30)):
+            with self.assertLogs(si.LOGGER, level="INFO"):
+                self.assertTrue(si.check_tokenizer(FakeTokenizer(length), 512))
+
+    def test_capacity_limit_rejects_invalid_length(self):
+        self.assertEqual(si.SentimentModelConfig().max_length, 512)
+        si.check_max_length(512, 512)
+        for length in (513, 0, -1, True):
+            with self.assertRaises(si.ModelCheckError):
+                si.check_max_length(length, 512)
+        with self.assertRaisesRegex(si.ModelCheckError, "max_position_embeddings"):
+            si.check_max_length(128, None)
+
+    def test_load_rejects_capacity_before_loading_weights(self):
+        fake_transformers = SimpleNamespace(
+            AutoConfig=Mock(), AutoTokenizer=Mock(), AutoModelForSequenceClassification=Mock())
+        fake_transformers.AutoConfig.from_pretrained.return_value = SimpleNamespace(max_position_embeddings=512)
+        with patch.dict("sys.modules", {"torch": Mock(), "transformers": fake_transformers}), \
+                patch.object(si, "resolve_model_path", return_value=("fake", None)):
+            with self.assertRaisesRegex(si.ModelCheckError, "513.*max_position_embeddings=512"):
+                si.load_sentiment_model(si.SentimentModelConfig(max_length=513))
+        fake_transformers.AutoModelForSequenceClassification.from_pretrained.assert_not_called()
 
     def test_pick_device(self):
         self.assertEqual(si.pick_device("auto", True, True), "cuda")
@@ -198,11 +247,15 @@ class PredictTests(unittest.TestCase):
     def test_truncation_flag_and_max_length_respected(self):
         tok = FakeTokenizer()
         bundle, _ = make_bundle(tokenizer=tok)
-        long_text = " ".join(f"kata{i}" for i in range(300))
-        out = si.predict_sentiment_probs(["pendek saja", long_text], bundle=bundle, return_diagnostics=True)
-        self.assertEqual(out["terpotong"].tolist(), [False, True])
-        self.assertGreater(int(out.loc[1, "n_token"]), 128)
-        self.assertLessEqual(max(tok.seen_lengths), 128)
+        texts = ["kata " * count for count in (600, 127, 510, 511, 126)]
+        out = si.predict_sentiment_probs(texts, bundle=bundle, batch_size=2, return_diagnostics=True)
+        self.assertEqual(out["n_token"].tolist(), [602, 129, 512, 513, 128])
+        self.assertEqual(out["terpotong"].tolist(), [True, False, False, True, False])
+        self.assertEqual(tok.seen_lengths, [129, 512, 512])  # sort panjang + padding dinamis
+        self.assertTrue(all(call[:3] == (True, True, 512) for call in tok.batch_calls))
+        summary = si.summarize_predictions(pd.Series(texts), out, max_length=512)
+        self.assertEqual(summary["n_terpotong"], 2)
+        self.assertEqual(summary["persen_terpotong"], 40.0)
         self.assertTrue(out[list(si.PROB_COLUMNS)].notna().all().all())
 
     def test_logits_returned_in_same_order_as_probs(self):
@@ -222,21 +275,40 @@ class PredictTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             si.predict_sentiment_probs(TEXTS, bundle=bundle, batch_size=0)
 
-    def test_run_model_checks_pass_and_catch_bad_tokenizer(self):
-        bundle, _ = make_bundle()
-        checks = si.run_model_checks(bundle, TEXTS)
-        self.assertTrue(all(c["lulus"] for c in checks), checks)
-        bad_bundle, _ = make_bundle(tokenizer=FakeTokenizer(int(1e30)))
-        self.assertFalse(all(c["lulus"] for c in si.run_model_checks(bad_bundle, TEXTS)))
+    def test_run_model_checks_tokenizer_limit_is_information(self):
+        for length in (128, int(1e30)):
+            checks = si.run_model_checks(make_semantic_bundle(tokenizer=FakeTokenizer(length)), TEXTS)
+            self.assertTrue(all(c["lulus"] for c in checks), checks)
+
+
+class LabelSemanticsTests(unittest.TestCase):
+    def test_expected_mapping_passes(self):
+        checks = si.check_label_semantics(make_semantic_bundle())
+        self.assertEqual(len(checks), 3)
+        self.assertTrue(all(check["lulus"] for check in checks), checks)
+        for check in checks:
+            self.assertEqual(set(check["probabilitas"]), set(si.PROB_COLUMNS))
+            for column in si.PROB_COLUMNS:
+                self.assertRegex(check["detail"], column + r"=\d\.\d{4}(?:;|$)")
+
+    def test_swapped_positive_negative_is_detected(self):
+        checks = si.check_label_semantics(make_semantic_bundle(swapped=True))
+        self.assertEqual([check["lulus"] for check in checks], [False, True, False])
+
+    def test_neutral_failure_is_reported_without_relabeling(self):
+        checks = si.check_label_semantics(make_semantic_bundle(neutral_fails=True))
+        self.assertEqual([check["lulus"] for check in checks], [True, False, True])
+        self.assertEqual(checks[1]["harapan"], "netral")
+        self.assertEqual(checks[1]["argmax"], "positif")
 
 
 class SummaryTests(unittest.TestCase):
     def test_summary_counts(self):
         bundle, _ = make_bundle()
-        long_text = " ".join(f"k{i}" for i in range(200))
+        long_text = " ".join(f"k{i}" for i in range(600))
         texts = pd.Series(["bagus", "", None, "barang bagus sekali", long_text, "ok mantap"])
         probs = si.predict_sentiment_probs(texts, bundle=bundle, return_diagnostics=True)
-        summary = si.summarize_predictions(texts, probs, max_length=128, short_words=2)
+        summary = si.summarize_predictions(texts, probs, max_length=512, short_words=2)
         self.assertEqual(summary["n_total"], 6)
         self.assertEqual(summary["n_kosong"], 2)
         self.assertEqual(summary["n_diinferensi"], 4)
@@ -277,7 +349,7 @@ class RunCliTests(unittest.TestCase):
         df = pd.DataFrame({
             "review_id": [f"p__{i}" for i in range(8)],
             "product_id": ["p"] * 8,
-            "text_light": TEXTS + ["", None],
+            "text_proposal": TEXTS + ["", None],
             "timestamp": pd.date_range("2026-01-01", periods=8).astype(str),
         })
         df.to_csv(Path(tmp) / "in.csv", index=False)
@@ -286,7 +358,7 @@ class RunCliTests(unittest.TestCase):
     def test_end_to_end_with_fake_model(self):
         with tempfile.TemporaryDirectory() as tmp:
             src_df = self._write_input(tmp)
-            bundle, _ = make_bundle()
+            bundle = make_semantic_bundle()
             code = run_mod.run(self._args(tmp, **{"--save-diagnostics": True}), bundle=bundle)
             self.assertEqual(code, run_mod.EXIT_OK)
             out = pd.read_csv(Path(tmp) / "out" / "hasil.csv", encoding="utf-8-sig")
@@ -296,11 +368,16 @@ class RunCliTests(unittest.TestCase):
             for col in si.PROB_COLUMNS + ("label_argmax", "n_token", "terpotong"):
                 self.assertIn(col, out.columns)
             self.assertEqual(out["review_id"].tolist(), src_df["review_id"].tolist())   # urutan & id utuh
-            ok = out[out["text_light"].notna() & (out["text_light"] != "")]
+            ok = out[out["text_proposal"].notna() & (out["text_proposal"] != "")]
             self.assertLess((ok[list(si.PROB_COLUMNS)].sum(axis=1) - 1).abs().max(), 1e-6)
             self.assertTrue(out.loc[6:, list(si.PROB_COLUMNS)].isna().all().all())       # kosong -> NaN, tetap ada
             summary = json.loads((Path(tmp) / "out" / "hasil_ringkasan.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["ringkasan"]["n_total"], 8)
+            self.assertEqual(summary["meta"]["max_length_pelatihan"], 128)
+            self.assertEqual(summary["meta"]["tokenizer_model_max_length"], 128)
+            self.assertEqual(summary["meta"]["max_length"], 512)
+            semantics = [c for c in summary["pemeriksaan"] if "kalimat" in c]
+            self.assertEqual(len(semantics), 3)
             self.assertTrue((Path(tmp) / "out" / "hasil_ringkasan.md").is_file())
 
     def test_refuses_to_overwrite_existing_output(self):
@@ -316,10 +393,43 @@ class RunCliTests(unittest.TestCase):
     def test_stops_when_checks_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_input(tmp)
-            bad_bundle, _ = make_bundle(tokenizer=FakeTokenizer(int(1e30)))
+            bad_bundle = make_semantic_bundle(neutral_fails=True)
             code = run_mod.run(self._args(tmp), bundle=bad_bundle)
             self.assertEqual(code, run_mod.EXIT_CHECK_FAILED)
             self.assertFalse((Path(tmp) / "out" / "hasil.csv").exists())
+            summary = json.loads((Path(tmp) / "out" / "hasil_ringkasan.json").read_text())
+            self.assertIsNone(summary["ringkasan"])
+            self.assertEqual(summary["meta"]["status"], "berhenti_pemeriksaan_gagal")
+            md = (Path(tmp) / "out" / "hasil_ringkasan.md").read_text()
+            for column in si.PROB_COLUMNS:
+                self.assertRegex(md, column + r"=\d\.\d{4}")
+
+    def test_continue_preserves_failed_checks_and_custom_length(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_input(tmp)
+            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "256"})
+            self.assertEqual(run_mod.run(args, bundle=make_semantic_bundle(swapped=True)), run_mod.EXIT_OK)
+            summary = json.loads((Path(tmp) / "out" / "hasil_ringkasan.json").read_text())
+            self.assertEqual(summary["meta"]["max_length"], 256)
+            self.assertFalse(all(c["lulus"] for c in summary["pemeriksaan"]))
+
+    def test_capacity_cannot_be_bypassed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_input(tmp)
+            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "513"})
+            self.assertEqual(run_mod.run(args, bundle=make_semantic_bundle()), run_mod.EXIT_CHECK_FAILED)
+            self.assertFalse((Path(tmp) / "out" / "hasil.csv").exists())
+
+    def test_defaults_and_missing_proposal_column(self):
+        args = run_mod.build_parser().parse_args([])
+        self.assertEqual(args.max_length, 512)
+        self.assertEqual(args.text_col, "text_proposal")
+        self.assertEqual(Path(args.input).name, "reviews_clean_v2.parquet")
+        self.assertEqual(Path(args.output).name, "sentimen_ulasan_v2.csv")
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_input(tmp).rename(columns={"text_proposal": "text_light"}).to_csv(
+                Path(tmp) / "in.csv", index=False)
+            self.assertEqual(run_mod.run(self._args(tmp), bundle=make_semantic_bundle()), run_mod.EXIT_STOPPED)
 
     def test_stops_on_missing_text_column_and_missing_input(self):
         with tempfile.TemporaryDirectory() as tmp:

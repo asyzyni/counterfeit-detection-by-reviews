@@ -7,6 +7,13 @@ from typing import Tuple
 
 _REPO_DIR = Path(__file__).resolve().parent.parent.parent
 
+# Pengecualian normalisasi slang/typo text_proposal; dapat diubah pengguna.
+# Mempertahankan "kw" adalah penyimpangan disengaja dari contoh proposal 3.3.
+PROTECTED_TERMS = (
+    "kw", "ori", "original", "palsu", "replika", "imitasi", "hdc",
+    "bukan ori", "sesuai deskripsi",
+)
+
 
 @dataclass
 class CleaningConfig:

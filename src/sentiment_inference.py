@@ -43,7 +43,14 @@ LOGGER = logging.getLogger(__name__)
 REPO_ID = "asyzyni/indobert-nlu-smsa-counterfeit-ta"
 REVISION_ENV = "INDOBERT_SENTIMENT_REVISION"
 TOKEN_ENV = "HF_TOKEN"
-MAX_LENGTH = 128
+MAX_LENGTH = 512
+MAX_LENGTH_PELATIHAN = 128  # Sumber: konteks fine-tuning dari pengguna.
+
+LABEL_SEMANTICS_SENTENCES = (
+    ("positif", "Barangnya bagus banget, sesuai deskripsi, pengiriman cepat"),
+    ("netral", "Barang sudah sampai, belum saya coba"),
+    ("negatif", "Barang rusak, tidak sesuai foto, kecewa berat"),
+)
 
 PROB_COLUMNS = ("p_negatif", "p_netral", "p_positif")
 LOGIT_COLUMNS = ("logit_negatif", "logit_netral", "logit_positif")
@@ -136,23 +143,28 @@ def check_label_mapping(
 
 
 def check_tokenizer(tokenizer: Any, max_length: int = MAX_LENGTH, strict: bool = True) -> bool:
-    """Periksa ``tokenizer.model_max_length == max_length``.
-
-    Inferensi tetap memakai ``max_length`` eksplisit, tetapi nilai default tokenizer yang
-    sangat besar menandakan tokenizer tersimpan tidak sama dengan saat training.
-    """
+    """Catat batas tokenizer; ``strict`` hanya untuk kompatibilitas API lama."""
 
     actual = getattr(tokenizer, "model_max_length", None)
-    if actual == max_length:
-        return True
-    message = (
-        f"tokenizer.model_max_length = {actual}, diharapkan {max_length}. "
-        "Inferensi tetap memakai max_length eksplisit."
+    LOGGER.info(
+        "tokenizer.model_max_length=%s (informasi); max_length inferensi eksplisit=%s",
+        actual, max_length,
     )
-    if strict:
-        raise ModelCheckError(message)
-    LOGGER.warning(message)
-    return False
+    return True
+
+
+def check_max_length(max_length: int, max_position_embeddings: int | None) -> None:
+    """Batas inferensi harus positif dan tidak melebihi kapasitas posisi model."""
+
+    if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length <= 0:
+        raise ModelCheckError("max_length harus bilangan bulat positif")
+    if max_position_embeddings is None or max_position_embeddings <= 0:
+        raise ModelCheckError("model.config.max_position_embeddings tidak tersedia/valid")
+    if max_length > max_position_embeddings:
+        raise ModelCheckError(
+            f"max_length={max_length} melebihi model.config.max_position_embeddings="
+            f"{max_position_embeddings}; kurangi --max-length."
+        )
 
 
 def pick_device(requested: str, cuda_available: bool, mps_available: bool) -> str:
@@ -195,7 +207,7 @@ class SentimentModelConfig:
     max_length: int = MAX_LENGTH
     batch_size: int = 16
     token_env: str = TOKEN_ENV
-    strict_tokenizer_check: bool = True
+    strict_tokenizer_check: bool = True  # kompatibilitas; tokenizer hanya informasi
     allow_download: bool = True
 
 
@@ -208,6 +220,7 @@ class SentimentBundle:
     max_length: int = MAX_LENGTH
     batch_size: int = 16
     meta: dict = field(default_factory=dict)
+    max_position_embeddings: int = 512
 
 
 def _has_required_files(path: Path) -> list[str]:
@@ -266,7 +279,7 @@ def resolve_model_path(config: SentimentModelConfig) -> tuple[str, str | None]:
 
 
 def load_sentiment_model(config: SentimentModelConfig | None = None) -> SentimentBundle:
-    """Muat tokenizer + model (fp32, eval) dan kembalikan bundle siap pakai."""
+    """Muat model fp32/eval; default inferensi 512, dibatasi kapasitas posisi model."""
 
     cfg = config or SentimentModelConfig()
 
@@ -277,6 +290,8 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
     path, revision = resolve_model_path(cfg)
 
     model_config = AutoConfig.from_pretrained(path, local_files_only=True)
+    max_positions = getattr(model_config, "max_position_embeddings", None)
+    check_max_length(cfg.max_length, max_positions)
     if int(getattr(model_config, "num_labels", 0)) != 3:
         raise ModelCheckError(f"Model harus punya 3 kelas; num_labels={model_config.num_labels}")
     sentiment_indices = check_label_mapping(model_config.id2label)
@@ -310,6 +325,9 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
         "device": device,
         "dtype": "float32",
         "max_length": cfg.max_length,
+        "max_length_pelatihan": MAX_LENGTH_PELATIHAN,
+        "tokenizer_model_max_length": getattr(tokenizer, "model_max_length", None),
+        "max_position_embeddings": max_positions,
         "id2label": {int(k): str(v) for k, v in model_config.id2label.items()},
         "torch": torch.__version__,
         "transformers": transformers.__version__,
@@ -322,6 +340,7 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
         max_length=cfg.max_length,
         batch_size=cfg.batch_size,
         meta=meta,
+        max_position_embeddings=max_positions,
     )
 
 
@@ -366,6 +385,7 @@ def predict_sentiment_probs(
 
     if bundle is None:
         bundle = load_sentiment_model(config)
+    check_max_length(bundle.max_length, bundle.max_position_embeddings)
     size = bundle.batch_size if batch_size is None else batch_size
     if size <= 0:
         raise ValueError("batch_size harus lebih besar dari 0")
@@ -461,6 +481,34 @@ def argmax_label(probs: pd.DataFrame) -> pd.Series:
 # PEMERIKSAAN MODEL (butuh bundle)
 # ============================================================
 
+def check_label_semantics(bundle: SentimentBundle) -> list[dict]:
+    """Uji tiga kalimat tetap Bab 3.4.2 menggunakan bundle inferensi yang sama."""
+
+    sentences = [text for _, text in LABEL_SEMANTICS_SENTENCES]
+    try:
+        probs = predict_sentiment_probs(sentences, bundle=bundle, log_every=0)
+        labels = argmax_label(probs)
+    except Exception as exc:
+        return [
+            {"nama": f"semantik label {expected}", "lulus": False,
+             "detail": f"{text!r}: {type(exc).__name__}: {exc}"}
+            for expected, text in LABEL_SEMANTICS_SENTENCES
+        ]
+
+    checks = []
+    for i, (expected, text) in enumerate(LABEL_SEMANTICS_SENTENCES):
+        probabilities = {column: float(probs.iloc[i][column]) for column in PROB_COLUMNS}
+        detail = "; ".join(f"{column}={value:.4f}" for column, value in probabilities.items())
+        checks.append({
+            "nama": f"semantik label {expected}",
+            "lulus": bool(labels.iloc[i] == expected),
+            "detail": f"{text!r}; {detail}; argmax={labels.iloc[i]}; harapan={expected}",
+            "kalimat": text, "harapan": expected, "argmax": labels.iloc[i],
+            "probabilitas": probabilities,
+        })
+    return checks
+
+
 def run_model_checks(
     bundle: SentimentBundle,
     sample_texts: Sequence[str],
@@ -483,10 +531,19 @@ def run_model_checks(
 
     actual = getattr(bundle.tokenizer, "model_max_length", None)
     add(
-        f"tokenizer.model_max_length = {bundle.max_length}",
-        actual == bundle.max_length,
-        f"nilai: {actual}",
+        "tokenizer.model_max_length (informasi)",
+        True,
+        f"nilai: {actual}; max_length inferensi eksplisit: {bundle.max_length}",
     )
+    try:
+        check_max_length(bundle.max_length, bundle.max_position_embeddings)
+        add("max_length <= max_position_embeddings", True,
+            f"{bundle.max_length} <= {bundle.max_position_embeddings}")
+    except ModelCheckError as exc:
+        add("max_length <= max_position_embeddings", False, str(exc))
+        return checks
+
+    checks.extend(check_label_semantics(bundle))
 
     sample = [str(text) for text in sample_texts if str(text).strip()]
     if not sample:
@@ -560,7 +617,7 @@ def summarize_predictions(
     deviation = float(np.abs(prob_values.sum(axis=1) - 1.0).max()) if n_inferred else 0.0
 
     tokens = probs.loc[inferred, "n_token"].astype(float).to_numpy()
-    truncated = int(probs["terpotong"].to_numpy(dtype=bool).sum())
+    truncated = int((tokens > max_length).sum())
 
     return {
         "n_total": n_total,
@@ -586,21 +643,33 @@ KETERBATASAN = (
     "Model difine-tune pada SmSA (ulasan umum), bukan ulasan marketplace. Kualitas pada domain "
     "ulasan ponsel BELUM terukur; evaluasi domain memerlukan sampel berlabel manual (rencana 150 baris, "
     "bukan dari rating bintang). Angka di sini adalah distribusi keluaran model, bukan akurasi. "
-    "Jangan mengklaim akurasi di domain marketplace."
+    "Jangan mengklaim akurasi di domain marketplace. "
+    "Model difine-tune dengan max_length 128; inferensi memakai 512 sesuai proposal; "
+    "perilaku pada ulasan > 128 token tidak divalidasi."
 )
 
 
-def format_summary_md(summary: dict, meta: dict, checks: list[dict] | None = None) -> str:
+def format_summary_md(summary: dict | None, meta: dict, checks: list[dict] | None = None) -> str:
     """Ringkasan sanity check dalam Markdown (Bahasa Indonesia)."""
 
     lines = ["# Ringkasan inferensi sentimen (RM 1)", ""]
     lines += ["## Model dan lingkungan", ""]
-    for key in ("repo_id", "revision", "model_path", "device", "dtype", "max_length", "torch", "transformers"):
+    for key in ("repo_id", "revision", "model_path", "device", "dtype", "max_length",
+                "max_length_pelatihan", "tokenizer_model_max_length", "max_position_embeddings",
+                "torch", "transformers"):
         if key in meta:
-            lines.append(f"- {key}: `{meta[key]}`")
-    for key in ("input", "output", "jumlah_baris_input", "waktu_mulai", "durasi_detik"):
+            value = f'"{meta[key]}"' if key == "model_path" else meta[key]
+            lines.append(f"- {key}: `{value}`")
+    for key in ("input", "output", "jumlah_baris_input", "waktu_mulai", "durasi_detik", "status"):
         if key in meta:
-            lines.append(f"- {key}: `{meta[key]}`")
+            value = f'"{meta[key]}"' if key in ("input", "output") else meta[key]
+            lines.append(f"- {key}: `{value}`")
+    if summary is None:
+        lines += ["", "Inferensi penuh belum dijalankan karena pemeriksaan model gagal."]
+        lines += ["", "## Pemeriksaan model", ""]
+        for check in checks or []:
+            lines.append(f"- [{'OK' if check['lulus'] else 'GAGAL'}] {check['nama']}: {check['detail']}")
+        return "\n".join(lines + ["", "## Keterbatasan", "", KETERBATASAN, ""])
     lines += ["", "## Sanity check", ""]
     lines += [
         f"- Baris total: {summary['n_total']:,}",

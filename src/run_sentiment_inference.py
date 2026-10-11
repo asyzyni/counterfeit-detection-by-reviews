@@ -6,13 +6,14 @@ Contoh (Mac M2, MPS):
     python -m src.run_sentiment_inference --device mps --batch-size 16
 
 Contoh uji coba kecil:
-    python -m src.run_sentiment_inference --device mps --limit 200 --output outputs/sentiment/uji_200.csv
+    python -m src.run_sentiment_inference --device mps --limit 200 --output "outputs/sentiment/uji_200_v2.csv"
 
 Kaggle GPU: set HF_TOKEN lewat Secrets, lalu --device cuda --batch-size 64.
 Dari folder model lokal (tanpa jaringan): --model-dir "<folder>".
 
 Keluaran: CSV (kolom asli + p_negatif, p_netral, p_positif + label_argmax) dan ringkasan
 sanity check (.json dan .md) di sampingnya. File keluaran yang sudah ada TIDAK ditimpa.
+Default: text_proposal dari "outputs/cleaned/reviews_clean_v2.parquet", max_length 512.
 """
 
 from __future__ import annotations
@@ -32,10 +33,14 @@ import pandas as pd
 from .config import ExperimentConfig
 from .sentiment_inference import (
     LABEL_NAMES,
+    MAX_LENGTH,
+    MAX_LENGTH_PELATIHAN,
+    ModelCheckError,
     PROB_COLUMNS,
     SentimentBundle,
     SentimentModelConfig,
     argmax_label,
+    check_max_length,
     format_summary_md,
     load_sentiment_model,
     predict_sentiment_probs,
@@ -55,13 +60,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inferensi sentimen RM 1 (IndoBERT SmSA, 3 kelas)")
     parser.add_argument(
         "--input",
-        default=str(experiment.cleaned_dir / "reviews_clean.parquet"),
+        default=str(experiment.cleaned_dir / "reviews_clean_v2.parquet"),
         help="Tabel ulasan bersih (.parquet atau .csv)",
     )
-    parser.add_argument("--text-col", default="text_light")
+    parser.add_argument("--text-col", default="text_proposal", help="Kolom teks Transformer (default: text_proposal)")
     parser.add_argument(
         "--output",
-        default=str(experiment.sentiment_dir / "sentimen_ulasan.csv"),
+        default=str(experiment.sentiment_dir / "sentimen_ulasan_v2.csv"),
         help="CSV keluaran; tidak boleh sudah ada",
     )
     parser.add_argument("--repo-id", default=SentimentModelConfig().repo_id)
@@ -70,14 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--max-length", type=int, default=MAX_LENGTH,
+                        help="Batas token termasuk token khusus (default: 512); <= max_position_embeddings model")
     parser.add_argument("--limit", type=int, default=None, help="Hanya N baris pertama (uji coba)")
     parser.add_argument("--short-words", type=int, default=2, help="Ambang 'sangat pendek' (jumlah kata) untuk ringkasan")
     parser.add_argument("--sample-checks", type=int, default=16, help="Jumlah teks untuk pemeriksaan model")
     parser.add_argument("--save-logits", action="store_true", help="Simpan logit_negatif/netral/positif")
     parser.add_argument("--save-diagnostics", action="store_true", help="Simpan kolom n_token dan terpotong")
     parser.add_argument("--no-argmax", action="store_true", help="Jangan tambahkan kolom label_argmax")
-    parser.add_argument("--no-tokenizer-strict", action="store_true", help="Peringatan (bukan error) bila model_max_length tokenizer != 128")
-    parser.add_argument("--continue-on-failed-checks", action="store_true")
+    parser.add_argument("--no-tokenizer-strict", action="store_true",
+                        help="Kompatibilitas CLI lama; model_max_length tokenizer selalu informasi")
+    parser.add_argument("--continue-on-failed-checks", action="store_true",
+                        help="Lanjutkan meski sanity check/argmax tiga kalimat gagal; tidak melewati batas posisi model")
     return parser
 
 
@@ -103,13 +112,13 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
     summary_json = output_path.with_name(output_path.stem + "_ringkasan.json")
     summary_md = output_path.with_name(output_path.stem + "_ringkasan.md")
 
-    existing = [str(p) for p in (output_path, summary_json, summary_md) if p.exists()]
+    existing = [f'"{p}"' for p in (output_path, summary_json, summary_md) if p.exists()]
     if existing:
         print("BERHENTI: file keluaran sudah ada dan tidak akan ditimpa:\n  " + "\n  ".join(existing))
         print("Pilih --output lain atau pindahkan file lama (bukan dihapus) lebih dulu.")
         return EXIT_STOPPED
     if not input_path.is_file():
-        print(f"BERHENTI: input tidak ditemukan: {input_path}")
+        print(f'BERHENTI: input tidak ditemukan: "{input_path}"')
         return EXIT_STOPPED
 
     started = time.time()
@@ -124,7 +133,7 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
     if args.limit:
         df = df.head(args.limit).copy()
     df = df.reset_index(drop=True)
-    print(f"Input: {input_path} ({len(df):,} baris)")
+    print(f'Input: "{input_path}" ({len(df):,} baris)')
 
     if bundle is None:
         config = SentimentModelConfig(
@@ -133,19 +142,51 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
             model_dir=args.model_dir,
             device=args.device,
             batch_size=args.batch_size,
+            max_length=args.max_length,
             strict_tokenizer_check=not args.no_tokenizer_strict,
         )
         if args.revision:
             config.revision = args.revision
-        bundle = load_sentiment_model(config)
+        try:
+            bundle = load_sentiment_model(config)
+        except ModelCheckError as exc:
+            print(f"BERHENTI: {exc}")
+            return EXIT_CHECK_FAILED
+    try:
+        check_max_length(args.max_length, bundle.max_position_embeddings)
+    except ModelCheckError as exc:
+        print(f"BERHENTI: {exc}")
+        return EXIT_CHECK_FAILED
+    bundle.max_length = args.max_length
     bundle.batch_size = args.batch_size
     print(f"Model siap di device: {bundle.device}")
+
+    def write_summary(summary: dict | None, checks: list[dict], status: str) -> None:
+        meta = dict(bundle.meta)
+        meta.update({
+            "max_length": bundle.max_length,
+            "max_length_pelatihan": MAX_LENGTH_PELATIHAN,
+            "tokenizer_model_max_length": getattr(bundle.tokenizer, "model_max_length", None),
+            "max_position_embeddings": bundle.max_position_embeddings,
+            "input": str(input_path), "output": str(output_path),
+            "jumlah_baris_input": len(df), "status": status,
+            "waktu_mulai": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
+            "durasi_detik": round(time.time() - started, 1),
+            "python": platform.python_version(),
+        })
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with summary_json.open("x", encoding="utf-8") as stream:
+            json.dump({"meta": meta, "ringkasan": summary, "pemeriksaan": checks},
+                      stream, ensure_ascii=False, indent=2)
+        with summary_md.open("x", encoding="utf-8") as stream:
+            stream.write(format_summary_md(summary, meta, checks))
 
     # --- pemeriksaan model sebelum run penuh ---
     checks = run_model_checks(bundle, _sample_texts(df[args.text_col], args.sample_checks))
     for check in checks:
         print(f"  [{'OK' if check['lulus'] else 'GAGAL'}] {check['nama']} -- {check['detail']}")
     if not all(c["lulus"] for c in checks) and not args.continue_on_failed_checks:
+        write_summary(None, checks, "berhenti_pemeriksaan_gagal")
         print("BERHENTI: ada pemeriksaan model yang gagal (lihat di atas).")
         return EXIT_CHECK_FAILED
 
@@ -175,24 +216,9 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
     assert summary["deviasi_maks_jumlah_prob"] <= 1e-6, "jumlah probabilitas != 1"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_csv(output_path, index=False, encoding="utf-8-sig", lineterminator="\n")
-
-    meta = dict(bundle.meta)
-    meta.update(
-        {
-            "input": str(input_path),
-            "output": str(output_path),
-            "jumlah_baris_input": len(df),
-            "waktu_mulai": datetime.fromtimestamp(started).isoformat(timespec="seconds"),
-            "durasi_detik": round(time.time() - started, 1),
-            "python": platform.python_version(),
-        }
-    )
-    summary_json.write_text(
-        json.dumps({"meta": meta, "ringkasan": summary, "pemeriksaan": checks}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    summary_md.write_text(format_summary_md(summary, meta, checks), encoding="utf-8")
+    out.to_csv(output_path, mode="x", index=False, encoding="utf-8-sig", lineterminator="\n")
+    write_summary(summary, checks, "selesai" if all(c["lulus"] for c in checks)
+                  else "selesai_dengan_pemeriksaan_gagal")
 
     print("\n" + "=" * 64)
     print("RINGKASAN SANITY CHECK")
@@ -204,7 +230,7 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
     for name in LABEL_NAMES:
         item = summary["distribusi_argmax"][name]
         print(f"  argmax {name:<8}: {item['n']:,} ({item['persen']}%)")
-    print(f"Keluaran: {output_path}")
+    print(f'Keluaran: "{output_path}"')
     return EXIT_OK
 
 
