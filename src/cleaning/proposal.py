@@ -71,7 +71,9 @@ def _strip_special(text: str) -> str:
 def _proposal_transformer(
     slang: Mapping[str, str] | None,
     protected_terms: Sequence[str],
+    on_slang: Callable[[str, str, str, str], None] | None = None,
 ) -> Callable[[object], tuple[str, dict[str, int]]]:
+    """Opsional: laporkan (kunci, baku, token asal, hasil) untuk penggantian aktual."""
     protected = _phrase_pattern(protected_terms)
     dictionary = {WHITESPACE_RE.sub(" ", key).strip().casefold(): value
                   for key, value in (slang or {}).items()}
@@ -86,13 +88,17 @@ def _proposal_transformer(
             def replace(match: re.Match) -> str:
                 nonlocal replacements
                 original = match.group()
-                replacement = dictionary[WHITESPACE_RE.sub(" ", original).casefold()]
+                key = WHITESPACE_RE.sub(" ", original).casefold()
+                baku = dictionary[key]
+                replacement = baku
                 # Tidak lowercase seluruh ulasan; pertahankan pola kapital token sumber.
                 if original.isupper():
                     replacement = replacement.upper()
                 elif original.istitle():
                     replacement = replacement[:1].upper() + replacement[1:]
                 replacements += int(replacement != original)
+                if replacement != original and on_slang is not None:
+                    on_slang(key, baku, original, replacement)
                 return replacement
             return slang_pattern.sub(replace, part)
 

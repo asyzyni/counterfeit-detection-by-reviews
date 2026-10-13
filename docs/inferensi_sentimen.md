@@ -9,17 +9,54 @@ Kolom keluaran: `p_negatif`, `p_netral`, `p_positif` (urutan kolom diturunkan da
 1. Hash commit **lengkap (40 karakter)** model di Hugging Face. Hash singkat (mis. `5366aae`) ditolak, karena tidak dipin.
 2. Token Hugging Face lewat variabel lingkungan `HF_TOKEN` (Kaggle: Secrets). Jangan menulisnya di kode, notebook, atau log.
 3. `pip install -r "requirements.txt"` (butuh torch, transformers, huggingface_hub, safetensors, pyarrow).
-4. Tabel proposal v2. Jalur baru membutuhkan kamus slang CSV UTF-8 dua kolom `slang,baku` dari pengguna.
-   Kamus tidak dibuat atau diunduh otomatis. Tanpa kamus, pembuatan v2 berhenti tanpa menulis parquet.
+4. Tabel proposal v2. Kamus CSV UTF-8 dua kolom `slang,baku` dikonversi secara lokal dari ekspor
+   SEACrowd/kamus_alay yang disediakan pengguna. Tidak ada unduhan otomatis; tanpa kamus,
+   pembuatan v2 berhenti tanpa menulis parquet.
 
 ## Membuat preprocessing proposal
 
-    python -m src.cleaning.run_proposal --slang-csv "references/slang.csv"
+Sumber: Salsabila dkk. (2018), *Colloquial Indonesian Lexicon*, melalui ekspor loader SEACrowd/kamus_alay
+config `*_source` dengan `load_dataset` (versi ekspor menurut pengguna: datasets 3.6.0, seacrowd 0.2.2,
+Python 3.13.1). URL asal loader, hash dan batas verifikasi dicatat dalam "references/slang_PROVENANCE.md".
+Lisensi dicatat **Unknown** menurut informasi halaman SEACrowd yang disampaikan pengguna; tidak diasumsikan
+sebagai izin redistribusi. Pengguna memilih agar "references/slang.csv" tetap lokal dan diabaikan Git.
+Aturan `*.csv` sudah ada; usulan `references/sumber/` untuk ".gitignore" hanya ditampilkan di provenance.
 
-Perintah membaca "outputs/cleaned/reviews_clean.parquet" dan menulis
-"outputs/cleaned/reviews_clean_v2.parquet" serta "reports/preprocessing_proposal_v2.md".
-Path kamus di contoh harus diganti sesuai file yang disediakan pengguna. File keluaran yang sudah ada ditolak.
-`--input`, `--output`, dan `--report` dapat menunjuk nama baru untuk percobaan berikutnya.
+    python -m src.cleaning.build_slang_dictionary \
+      --input "references/sumber/colloquial-indonesian-lexicon.csv" \
+      --output "references/slang.csv" \
+      --excluded "references/slang_dikecualikan.csv" \
+      --profile "reports/profil_kamus_alay.md" \
+      --expected-sha256 "48e7450875b75935cf15b200524e97927a8c27f8169e658cf4a73993c7818d76"
+
+Profil terverifikasi: 15.006 record CSV, 4.330 slang unik, 4.409 pasangan unik, dan 71 kunci multi-baku.
+CSV mempunyai field komentar berkutip dengan newline, sehingga 15.397 LF bukan 15.396 record.
+Arti `in_dictionary` tidak diasumsikan; `in_dictionary`/`categories`/`context` tidak menyaring kamus.
+Isi komentar Instagram tidak disalin ke keluaran konverter. Kedua CSV turunan hanya memuat
+`slang,baku` atau `slang,baku,alasan`.
+
+Asumsi filter: casefold dan rapikan spasi kunci; baku hanya dirapikan spasinya; buang kosong,
+duplikat pasangan, slang sama dengan baku, substring `PROTECTED_TERMS` pada kedua sisi,
+semua pemetaan kunci multi-baku, serta kunci 1–2 karakter. Konflik dideteksi sebelum filter lain;
+frekuensi tidak dipakai memilih baku. Pencocokan substring di konverter juga membuang `ori` dalam
+`favorit`/`tutorial`. Daftar seluruh 131 kunci dua karakter tersedia di "reports/profil_kamus_alay.md"
+untuk keputusan lanjutan; belum ada whitelist.
+
+Hasilnya 4.124 pasangan. Kunci yang hilang 206/4.330 = 4,757506%: **gerbang 30% tidak terpicu**.
+Bila >30% kunci nonkosong unik hilang, konverter menulis bahan tinjauan lalu exit 2; berhenti dan tunggu
+keputusan pengguna sebelum perintah berikutnya. Duplikasi record konteks tidak dihitung sebagai kehilangan kunci.
+
+    python -m src.cleaning.run_proposal \
+      --input "outputs/cleaned/reviews_clean (2).parquet" \
+      --slang-csv "references/slang.csv" \
+      --output "outputs/cleaned/reviews_clean_v2.parquet" \
+      --report "reports/preprocessing_proposal_v2.md"
+
+Input eksplisit wajib untuk berkas lokal ini; "outputs/cleaned/reviews_clean.parquet" tidak tersedia.
+SHA-256 input yang diverifikasi sebelum run:
+`c15e1ab7c1bf4de37d61e430fbe4d54b314938050cbd3ac3d294bf063a13ccb0`.
+File keluaran yang sudah ada ditolak. `--input`, `--output`, `--report`, `--excluded`, dan `--profile`
+dapat menunjuk nama baru sesuai CLI untuk percobaan berikutnya; input tidak diganti nama.
 
 `text_proposal` dibuat dari `review` asli: hapus URL; emoji/karakter di luar huruf Unicode, digit desimal,
 spasi, dan `. , ! ? ' -` diganti spasi; tanda baca identik berulang diringkas; angka berdiri sendiri
@@ -38,6 +75,34 @@ kosong. Tidak ada baris dihapus/disortir ulang. Kesamaan seluruh kolom lama, jum
 `review_id, seq_in_product` diperiksa sebelum dan sesudah round-trip parquet di memori.
 Laporan memuat hitungan per aturan, jumlah penggantian slang, kosong, duplikat, dan 20 contoh
 acak dari seluruh tabel dengan seed 42. Satu baris dapat berubah pada beberapa aturan.
+
+Audit artefak yang sudah ditulis dan ekspor tinjauan manual:
+
+    python -m src.cleaning.audit_proposal \
+      --input "outputs/cleaned/reviews_clean (2).parquet" \
+      --output "outputs/cleaned/reviews_clean_v2.parquet" \
+      --slang-csv "references/slang.csv" \
+      --report "reports/verifikasi_proposal_v2_alay.md" \
+      --top-csv "reports/top_penggantian_slang.csv" \
+      --expected-input-sha256 "c15e1ab7c1bf4de37d61e430fbe4d54b314938050cbd3ac3d294bf063a13ccb0" \
+      --expected-rows 64699 --expected-columns 27
+
+Pada CLI audit, `--output` menunjuk parquet v2 **yang dibaca**. Laporan dan CSV yang sudah ada ditolak;
+gunakan nama laporan/CSV baru untuk audit ulang. Transformasi diregenerasi dengan pencatatan penggantian
+aktual dan dibandingkan persis terhadap v2. CSV berisi 100 pasangan teratas menurut frekuensi, dengan
+3 ulasan berbeda yang dipilih `random_state=42` per pasangan; konteks berasal dari ulasan pengguna.
+Jika kurang dari tiga ulasan tersedia, slot sisanya kosong dan jumlah contoh dilaporkan.
+
+Hasil lokal terverifikasi pada 2026-10-13: **64.699 baris, 27 kolom lama identik, 29 kolom v2**;
+urutan `(review_id, seq_in_product)` dan nilai `text_light` identik. **`text_lex` tidak terdapat pada input
+ini maupun v2**, sehingga tidak ada nilai kolom tersebut yang dapat dibandingkan; kolom tidak ditambahkan.
+Ada 45.082 ulasan berubah, 58 `text_proposal` kosong (45 masih include), serta 61.003 penggantian slang
+dari 1.150 pasangan yang terpakai. Slang mengubah 26.594 ulasan; satu ulasan dapat memuat banyak penggantian.
+Seluruh sembilan istilah terlindungi memiliki nol kehilangan kemunculan per baris; hitungan sebelum/sesudah
+lengkap ada di laporan audit. SHA-256 input tetap sama dengan hash wajib di atas.
+
+`text_proposal` hanya masukan untuk IndoBERT. Audit ini tidak memvalidasi kualitas linguistik atau kualitas
+model; keputusan `--max-length` 128/512 tetap terbuka dan default tidak diubah.
 
 Cleaning mengecualikan duplikat teknis (produk + text_light + timestamp berjam identik, sesudah
 kemunculan pertama) dari `include_for_inference`. Duplikat teks hanya ditandai; flag tidak diubah.
@@ -99,6 +164,13 @@ batas kapasitas posisi model. Setelah run berhenti, gunakan nama output baru kar
 
 Unittest hanya mencakup kelas unittest sentimen. Pytest mencakup seluruh tes, termasuk fungsi pytest
 di "tests/cleaning". Tanpa folder model, tes model nyata dilewati; model palsu tidak memvalidasi kualitas model.
+
+Run penuh integrasi kamus pada 2026-10-13: `1 failed, 176 passed, 2 skipped in 6.48s` (exit 1).
+Keluaran asli lengkap: "reports/hasil_tes_integrasi_alay.txt". Semua tes konverter/audit/proposal lulus;
+kegagalan berada pada `TestHmmlearnParity.test_forward_matches_hmmlearn_score_and_posterior`
+di "tests/temporal/test_pipeline.py": "src/temporal/fitting.py" mengharapkan kovarians `(2, 3)`,
+sedangkan yang diterima `(2, 3, 3)`. HMM di luar lingkup dan tidak diubah. Dua tes model nyata dilewati
+karena `INDOBERT_SENTIMENT_MODEL_DIR` belum ditetapkan.
 
 ## Keterbatasan (tulis juga di naskah)
 
