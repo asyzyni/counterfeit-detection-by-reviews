@@ -1,0 +1,21 @@
+#!/bin/bash
+# Membalik semua pemindahan di _pembersihan/log_pemindahan.csv (tujuan -> asal).
+# Catatan: perubahan README.md (Tahap D) TIDAK dibalik oleh skrip ini; pakai: git checkout -- README.md
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ -e _to_delete/01_pipeline.png ] && [ ! -e 01_pipeline.png ]; then mkdir -p "$(dirname 01_pipeline.png)"; mv _to_delete/01_pipeline.png 01_pipeline.png; echo "kembali: "01_pipeline.png; else echo "LEWATI: "_to_delete/01_pipeline.png; fi
+if [ -e _to_delete/notebooks/00_debug.ipynb ] && [ ! -e notebooks/00_debug.ipynb ]; then mkdir -p "$(dirname notebooks/00_debug.ipynb)"; mv _to_delete/notebooks/00_debug.ipynb notebooks/00_debug.ipynb; echo "kembali: "notebooks/00_debug.ipynb; else echo "LEWATI: "_to_delete/notebooks/00_debug.ipynb; fi
+if [ -e _to_delete/check.ipynb ] && [ ! -e check.ipynb ]; then mkdir -p "$(dirname check.ipynb)"; mv _to_delete/check.ipynb check.ipynb; echo "kembali: "check.ipynb; else echo "LEWATI: "_to_delete/check.ipynb; fi
+if [ -e _to_delete/src/.DS_Store ] && [ ! -e src/.DS_Store ]; then mkdir -p "$(dirname src/.DS_Store)"; mv _to_delete/src/.DS_Store src/.DS_Store; echo "kembali: "src/.DS_Store; else echo "LEWATI: "_to_delete/src/.DS_Store; fi
+if [ -e _to_delete/outputs/cleaned/.DS_Store ] && [ ! -e outputs/cleaned/.DS_Store ]; then mkdir -p "$(dirname outputs/cleaned/.DS_Store)"; mv _to_delete/outputs/cleaned/.DS_Store outputs/cleaned/.DS_Store; echo "kembali: "outputs/cleaned/.DS_Store; else echo "LEWATI: "_to_delete/outputs/cleaned/.DS_Store; fi
+if [ -e _to_delete/outputs/.DS_Store ] && [ ! -e outputs/.DS_Store ]; then mkdir -p "$(dirname outputs/.DS_Store)"; mv _to_delete/outputs/.DS_Store outputs/.DS_Store; echo "kembali: "outputs/.DS_Store; else echo "LEWATI: "_to_delete/outputs/.DS_Store; fi
+if [ -e _to_delete/.DS_Store ] && [ ! -e .DS_Store ]; then mkdir -p "$(dirname .DS_Store)"; mv _to_delete/.DS_Store .DS_Store; echo "kembali: ".DS_Store; else echo "LEWATI: "_to_delete/.DS_Store; fi
+if [ -e _to_delete/.pytest_cache ] && [ ! -e .pytest_cache ]; then mkdir -p "$(dirname .pytest_cache)"; mv _to_delete/.pytest_cache .pytest_cache; echo "kembali: ".pytest_cache; else echo "LEWATI: "_to_delete/.pytest_cache; fi
+if [ -e _to_delete/tests/temporal/__pycache__ ] && [ ! -e tests/temporal/__pycache__ ]; then mkdir -p "$(dirname tests/temporal/__pycache__)"; mv _to_delete/tests/temporal/__pycache__ tests/temporal/__pycache__; echo "kembali: "tests/temporal/__pycache__; else echo "LEWATI: "_to_delete/tests/temporal/__pycache__; fi
+if [ -e _to_delete/tests/cleaning/__pycache__ ] && [ ! -e tests/cleaning/__pycache__ ]; then mkdir -p "$(dirname tests/cleaning/__pycache__)"; mv _to_delete/tests/cleaning/__pycache__ tests/cleaning/__pycache__; echo "kembali: "tests/cleaning/__pycache__; else echo "LEWATI: "_to_delete/tests/cleaning/__pycache__; fi
+if [ -e _to_delete/tests/__pycache__ ] && [ ! -e tests/__pycache__ ]; then mkdir -p "$(dirname tests/__pycache__)"; mv _to_delete/tests/__pycache__ tests/__pycache__; echo "kembali: "tests/__pycache__; else echo "LEWATI: "_to_delete/tests/__pycache__; fi
+if [ -e _to_delete/src/temporal/__pycache__ ] && [ ! -e src/temporal/__pycache__ ]; then mkdir -p "$(dirname src/temporal/__pycache__)"; mv _to_delete/src/temporal/__pycache__ src/temporal/__pycache__; echo "kembali: "src/temporal/__pycache__; else echo "LEWATI: "_to_delete/src/temporal/__pycache__; fi
+if [ -e _to_delete/src/features/__pycache__ ] && [ ! -e src/features/__pycache__ ]; then mkdir -p "$(dirname src/features/__pycache__)"; mv _to_delete/src/features/__pycache__ src/features/__pycache__; echo "kembali: "src/features/__pycache__; else echo "LEWATI: "_to_delete/src/features/__pycache__; fi
+if [ -e _to_delete/src/cleaning/__pycache__ ] && [ ! -e src/cleaning/__pycache__ ]; then mkdir -p "$(dirname src/cleaning/__pycache__)"; mv _to_delete/src/cleaning/__pycache__ src/cleaning/__pycache__; echo "kembali: "src/cleaning/__pycache__; else echo "LEWATI: "_to_delete/src/cleaning/__pycache__; fi
+if [ -e _to_delete/src/__pycache__ ] && [ ! -e src/__pycache__ ]; then mkdir -p "$(dirname src/__pycache__)"; mv _to_delete/src/__pycache__ src/__pycache__; echo "kembali: "src/__pycache__; else echo "LEWATI: "_to_delete/src/__pycache__; fi

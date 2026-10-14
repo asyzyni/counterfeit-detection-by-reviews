@@ -1,0 +1,22 @@
+ D .DS_Store
+ D 01_pipeline.png
+ M README.md
+ D RM1_execution_report.md
+ D docs/audit_pipeline.md
+ D docs/hmm_rm2.md
+ D docs/inferensi_sentimen.md
+ D docs/laporan_cleaning.md
+ D docs/metodologi.md
+ D docs/pipeline.md
+ D notebooks/00_debug.ipynb
+ M src/cleaning/proposal.py
+ M src/cleaning/run_proposal.py
+ M tests/cleaning/test_proposal.py
+?? PANDUAN_ISI_DAN_PEMBERSIHAN_FOLDER.md
+?? _pembersihan/
+?? _to_delete/
+?? docs/RM1_execution_report.md
+?? reports/inferensi_lokal_run2.md
+?? reports/preprocessing_proposal_v3.md
+?? src/export_sekuens.py
+?? tests/test_export_sekuens.py

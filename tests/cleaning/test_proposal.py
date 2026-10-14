@@ -1,4 +1,4 @@
-"""Aturan proposal dan kontrak v2; kamus di sini hanya fixture sintetis untuk tes."""
+"""Aturan proposal dan kontrak v3; kamus di sini hanya fixture sintetis untuk tes."""
 
 import numpy as np
 import pandas as pd
@@ -6,7 +6,7 @@ import pytest
 
 from src.cleaning.config import PROTECTED_TERMS
 from src.cleaning.proposal import (
-    build_proposal_table, clean_proposal, clean_proposal_series,
+    build_proposal_table, clean_proposal, clean_proposal_series, format_proposal_report,
     load_slang_dictionary, verify_original_columns,
 )
 from src.cleaning.run_proposal import EXIT_OK, EXIT_STOPPED, build_parser, run
@@ -29,6 +29,46 @@ from src.sentiment_inference import PROB_COLUMNS, SentimentBundle, predict_senti
 ])
 def test_each_proposal_rule(text, expected):
     assert clean_proposal(text) == expected
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("𝙗𝙖𝙜𝙪𝙨", "bagus"),
+    ("ｂａｇｕｓ", "bagus"),
+    ("bagus\u00a0sekali", "bagus sekali"),
+    ("bagus\u2028sekali", "bagus sekali"),
+    ("bagus\u2029sekali", "bagus sekali"),
+    ("𝙗𝙖𝙜𝙪𝙨 👍🏽 👨‍👩‍👧 🇮🇩 ❤️ 1️⃣", "bagus"),
+    ("bagus ｈｔｔｐｓ：／／ｃｏｎｔｏｈ．ｉｄ／ｂｇｓ", "bagus"),
+    ("bagus 𝙝𝙩𝙩𝙥𝙨://contoh.id/bgs", "bagus"),
+])
+def test_unicode_is_normalized_before_other_rules(text, expected):
+    assert clean_proposal(text) == expected
+
+
+@pytest.mark.parametrize("invisible", ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"])
+def test_zero_width_characters_are_removed_without_splitting_words(invisible):
+    assert clean_proposal(f"{invisible}ba{invisible}gus{invisible}") == "bagus"
+    assert clean_proposal(f"b{invisible}gs", {"bgs": "bagus"}) == "bagus"
+
+
+def test_slang_matches_after_unicode_normalization():
+    fake_dictionary = {"bgs": "bagus", "gk bgs": "kurang bagus"}
+    assert clean_proposal("𝙗𝙜𝙨 ｂｇｓ b\u200bgs", fake_dictionary) == "bagus bagus bagus"
+    assert clean_proposal("gk\u00a0bgs", fake_dictionary) == "kurang bagus"
+
+
+def test_nfkc_counts_changed_rows_separately_from_unicode_separators():
+    series = pd.Series(["𝙗𝙖𝙜𝙪𝙨", "ｂａｇｕｓ", "bagus\u00a0sekali", "ba\u200bgus",
+                        "bagus\u2028sekali", "bagus", "𝙗𝙖𝙜𝙪𝙨 ｂａｇｕｓ", None])
+    result, stats = clean_proposal_series(series, {})
+    assert result.tolist() == ["bagus", "bagus", "bagus sekali", "bagus",
+                               "bagus sekali", "bagus", "bagus bagus", ""]
+    rules = stats["baris_berubah_per_aturan"]
+    assert list(rules)[:3] == ["nfkc", "normalisasi_pemisah_unicode", "hapus_url"]
+    # NFKC menghitung baris (bukan karakter); NBSP sudah menjadi spasi pada tahap ini.
+    assert rules["nfkc"] == 4
+    assert rules["normalisasi_pemisah_unicode"] == 2
+    assert stats["n_berubah"] == 6
 
 
 def test_protected_terms_and_phrases_survive_dictionary():
@@ -57,7 +97,10 @@ def test_order_counts_empty_and_determinism():
     assert stats["n_berubah"] == 2 and stats["n_kosong"] == 2
     assert stats["jumlah_slang_dinormalkan"] == 1
     for rule, count in stats["baris_berubah_per_aturan"].items():
-        assert count == (2 if rule in ("hapus_emoji_karakter_khusus", "rapikan_spasi") else 1)
+        if rule in ("nfkc", "normalisasi_pemisah_unicode"):
+            assert count == 0
+        else:
+            assert count == (2 if rule in ("hapus_emoji_karakter_khusus", "rapikan_spasi") else 1)
     again, again_stats = clean_proposal_series(series, {"bgs": "bagus"})
     pd.testing.assert_series_equal(result, again)
     assert stats == again_stats
@@ -88,6 +131,31 @@ def test_table_preserves_all_original_columns_order_and_flags(original):
     _, partial = build_proposal_table(original, None)
     assert not partial["slang_dijalankan"]
     assert partial["jumlah_slang_dinormalkan"] == 0
+
+
+def test_unicode_normalization_only_changes_new_proposal_columns(original):
+    original["review"] = ["𝙗𝙖𝙜𝙪𝙨", "ｂｇｓ\u00a0sekali", "b\u200bgs"]
+    original["text_light"] = ["sumber lain", "ｂｇｓ", "b\u200bgs"]
+    original["text_lex"] = ["jangan\u00a0ubah", "𝙗𝙖𝙜𝙪𝙨", "tetap\u2028sama"]
+    original["nama_toko"] = ["Ｔｏｋｏ", "Toko\ufeff", "Café"]
+    original["nama_produk"] = ["𝙗𝙖𝙧𝙖𝙣𝙜", "Produk\u200d", "128\u00a0GB"]
+    before = original.copy(deep=True)
+    result, stats = build_proposal_table(original, {"bgs": "bagus"})
+    assert result.text_proposal.tolist() == ["bagus", "bagus sekali", "bagus"]
+    pd.testing.assert_frame_equal(original, before)
+    pd.testing.assert_frame_equal(result[list(before)], before)
+    verify_original_columns(before, result)
+    assert stats["seluruh_kolom_lama_identik"]
+
+
+def test_report_identifies_original_source_and_nfkc_count(original, tmp_path):
+    original["review"] = ["𝙗𝙖𝙜𝙪𝙨", "ｂｇｓ", "bagus"]
+    result, stats = build_proposal_table(original, {"bgs": "bagus"})
+    report = format_proposal_report(result, stats, tmp_path / "old.parquet",
+                                    tmp_path / "v3.parquet", tmp_path / "slang.csv")
+    assert "review asli + NFKC" in report
+    assert "| nfkc | 2 |" in report
+    assert "| normalisasi_pemisah_unicode | 0 |" in report
 
 
 def test_cleaned_empty_texts_can_be_inferred_as_nan(original):
@@ -126,6 +194,12 @@ def test_cli_no_dictionary_stops_and_no_files_written(tmp_path, original):
                                       "--report", str(tmp_path / "report.md")])
     assert run(args) == EXIT_STOPPED
     assert sorted(p.name for p in tmp_path.iterdir()) == ["old.parquet"]
+
+
+def test_cli_defaults_use_v3_output_and_report():
+    args = build_parser().parse_args([])
+    assert args.output.as_posix().endswith("outputs/cleaned/reviews_clean_v3.parquet")
+    assert args.report.as_posix().endswith("reports/preprocessing_proposal_v3.md")
 
 
 def test_cli_round_trip_report_and_no_overwrite(tmp_path, original):

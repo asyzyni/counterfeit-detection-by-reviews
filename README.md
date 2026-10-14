@@ -53,8 +53,8 @@ Semua konfigurasi (path dataset, hiperparameter IndoBERT, komponen HMM, serta di
 Cleaning resmi dijalankan dengan `python -m src.cleaning.run` dan menghasilkan satu file `"outputs/cleaned/reviews_clean.parquet"` beserta laporan di `"outputs/cleaned/reports/"`. Baca hasil melalui `from src.cleaning import load_clean_reviews`, lalu `reviews = load_clean_reviews()`; secara bawaan hanya baris yang layak inferensi dikembalikan, terurut per produk dan `seq_in_product`. Gunakan `only_included=False` untuk seluruh baris. Pipeline lama `DataPreprocessor` dinonaktifkan untuk folder berformat baru agar hasil tidak tercampur. Rincian ada di [laporan cleaning](docs/laporan_cleaning.md).
 
 Gunakan modul Python dari `src/` atau jalankan notebook di folder `notebooks/`:
-- `notebooks/01_clean_process_data.ipynb`: Pembersihan awal dataset ulasan produk.
-- `notebooks/02_pipeline_llm_hmm_xgb.ipynb`: Pipeline inferensi IndoBERT, estimasi HMM, ekstraksi fitur, dan pemodelan skor kecurigaan.
+- `notebooks/clean-process-data.ipynb`: Pembersihan awal dataset ulasan produk.
+- `notebooks/pipeline_llm_hmm_xgb.ipynb`: Pipeline inferensi IndoBERT, estimasi HMM, ekstraksi fitur, dan pemodelan skor kecurigaan.
 
 ### 3. Dokumentasi Arsitektur
 Detail arsitektur pipeline, desain eksperimen (Model A / B / C), serta justifikasi metrik evaluasi dapat dilihat pada dokumen [`docs/pipeline.md`](docs/pipeline.md).

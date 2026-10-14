@@ -1,12 +1,13 @@
 """Preprocessing Transformer Bab 3.3, terpisah dari text_light dan text_lex.
 
 Fungsi teks murni/deterministik. ``slang=None`` hanya untuk audit parsial;
-penulisan tabel v2 wajib memakai CSV kamus yang disediakan pengguna.
+penulisan tabel proposal wajib memakai CSV kamus yang disediakan pengguna.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -20,6 +21,10 @@ ALLOWED_PUNCTUATION = ".,!?' -"
 REPEATED_PUNCTUATION_RE = re.compile(r"([.,!?'\-])\1+")
 LONG_NUMBER_RE = re.compile(r"(?<!\w)\d{6,}(?!\w)")
 KEYCAP_RE = re.compile("[0-9#*]\ufe0f?\u20e3")
+UNICODE_SEPARATOR_TRANSLATION = str.maketrans({
+    **{ch: None for ch in "\u200b\u200c\u200d\u2060\ufeff"},
+    **{ch: " " for ch in "\u2028\u2029\u00a0"},
+})
 
 
 def load_slang_dictionary(path: str | Path) -> dict[str, str]:
@@ -103,6 +108,8 @@ def _proposal_transformer(
             return slang_pattern.sub(replace, part)
 
         steps = [
+            ("nfkc", lambda s: unicodedata.normalize("NFKC", s)),
+            ("normalisasi_pemisah_unicode", lambda s: s.translate(UNICODE_SEPARATOR_TRANSLATION)),
             ("hapus_url", lambda s: URL_IN_TEXT_RE.sub(" ", s)),
             ("hapus_emoji_karakter_khusus", _strip_special),
             ("ringkas_tanda_baca", lambda s: REPEATED_PUNCTUATION_RE.sub(r"\1", s)),
@@ -127,8 +134,9 @@ def clean_proposal(
     slang: Mapping[str, str] | None = None,
     protected_terms: Sequence[str] = PROTECTED_TERMS,
 ) -> str:
-    """URL -> simbol -> tanda baca -> angka panjang -> typo -> slang -> spasi.
+    """NFKC -> pemisah Unicode -> URL -> simbol -> tanda baca -> angka -> typo -> slang -> spasi.
 
+    Zero-width dihapus; NBSP serta pemisah baris/paragraf menjadi spasi biasa.
     Angka >= 6 digit yang berdiri sendiri dihapus; angka alfanumerik dipertahankan.
     Huruf yang sama >= 3 kali menjadi satu, tanpa lowercase paksa.
     ``slang=None`` melewati slang (hasil parsial, bukan final proposal).
@@ -207,7 +215,7 @@ def format_proposal_report(table: pd.DataFrame, stats: dict, input_path: Path,
 
     lines = ["# Audit preprocessing proposal Bab 3.3", "",
              f'- Masukan: "{input_path}"',
-             f'- Keluaran: "{output_path}"' if output_path else "- Keluaran parquet v2 belum ditulis.",
+             f'- Keluaran: "{output_path}"' if output_path else "- Keluaran parquet belum ditulis.",
              f'- Kamus: "{dictionary_path}"' if dictionary_path else
              "- PARSIAL: kamus slang belum tersedia; slang belum dijalankan. Angka di bawah belum final.", ""]
     for key, value in stats.items():
@@ -219,7 +227,13 @@ def format_proposal_report(table: pd.DataFrame, stats: dict, input_path: Path,
     for key, value in stats["baris_berubah_per_aturan"].items():
         lines.append(f"| {key} | {value} |")
     lines += ["", "## Asumsi dan penyimpangan", "",
-              "Sumber teks adalah review asli pada tabel lama, bukan text_light. Karakter di luar huruf Unicode, "
+              "Sumber teks adalah review asli + NFKC pada tabel lama. NFKC merupakan langkah pertama, "
+              "sebelum penghapusan URL; jumlah baris yang berubah ditampilkan pada aturan nfkc. "
+              "Setelah NFKC, U+200B/U+200C/U+200D/U+2060/U+FEFF dihapus, sedangkan "
+              "U+2028/U+2029/NBSP diganti spasi biasa pada aturan normalisasi_pemisah_unicode. "
+              "NBSP yang telah menjadi spasi pada NFKC dihitung pada aturan nfkc. "
+              "Kolom review, text_light, dan seluruh kolom lama dipertahankan apa adanya. "
+              "Karakter di luar huruf Unicode, "
               "digit desimal, spasi, dan . , ! ? ' - diganti spasi agar kata tidak tergabung. "
               "Tanda baca yang sama dan berurutan diringkas; kombinasi seperti !? tetap. "
               "Huruf berulang dihitung sebagai normalisasi typo; tidak ada lowercase paksa.", "",

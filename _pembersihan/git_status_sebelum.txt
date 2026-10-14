@@ -1,0 +1,18 @@
+ D RM1_execution_report.md
+ D docs/audit_pipeline.md
+ D docs/hmm_rm2.md
+ D docs/inferensi_sentimen.md
+ D docs/laporan_cleaning.md
+ D docs/metodologi.md
+ D docs/pipeline.md
+ M src/cleaning/proposal.py
+ M src/cleaning/run_proposal.py
+ M tests/cleaning/test_proposal.py
+?? PANDUAN_ISI_DAN_PEMBERSIHAN_FOLDER.md
+?? _pembersihan/
+?? check.ipynb
+?? docs/RM1_execution_report.md
+?? reports/inferensi_lokal_run2.md
+?? reports/preprocessing_proposal_v3.md
+?? src/export_sekuens.py
+?? tests/test_export_sekuens.py

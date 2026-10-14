@@ -1,4 +1,4 @@
-"""Buat tabel proposal v2 setelah kamus CSV slang,baku tersedia.
+"""Buat tabel proposal v3 setelah kamus CSV slang,baku tersedia.
 
     python -m src.cleaning.run_proposal --slang-csv "references/slang.csv"
 
@@ -28,9 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     defaults = CleaningConfig()
     parser = argparse.ArgumentParser(description="Tambah text_proposal; semua kolom/baris lama tetap")
     parser.add_argument("--input", type=Path, default=defaults.reviews_path)
-    parser.add_argument("--output", type=Path, default=defaults.output_dir / "reviews_clean_v2.parquet")
+    parser.add_argument("--output", type=Path, default=defaults.output_dir / "reviews_clean_v3.parquet")
     parser.add_argument("--report", type=Path,
-                        default=defaults.output_dir.parent.parent / "reports" / "preprocessing_proposal_v2.md")
+                        default=defaults.output_dir.parent.parent / "reports" / "preprocessing_proposal_v3.md")
     parser.add_argument("--slang-csv", type=Path, help="Wajib: CSV pengguna dua kolom slang,baku")
     return parser
 
