@@ -88,8 +88,8 @@ def test_family_a_rows(raw_dir: Path, tmp_path: Path) -> None:
 
     repeated = _row(result, file, 4)
     assert repeated["text_light"] == "baguss banget 👍👍"
-    assert pd.isna(repeated["timestamp"])
-    assert repeated["timestamp_status"] == "relatif"
+    assert pd.notna(repeated["timestamp"])
+    assert repeated["timestamp_status"] == "relatif_dikonversi"
 
     manifest = result.manifest.set_index("file").loc[file]
     assert manifest["n_baris_sumber"] == 8
@@ -140,7 +140,7 @@ def test_family_b_roles_and_rows(raw_dir: Path, tmp_path: Path) -> None:
     assert pd.isna(weird["timestamp"])
 
     relative = _row(result, file, 1)
-    assert relative["timestamp_status"] == "relatif"
+    assert relative["timestamp_status"] == "relatif_dikonversi"
 
 
 def test_aspect_vocab_moves_fragment(raw_dir: Path, tmp_path: Path) -> None:
@@ -233,10 +233,10 @@ def test_duplicate_file_groups(tmp_path: Path) -> None:
         ("2026-03-07", "ok", False),
         ("2025-09-08 11:53", "ok", True),
         ("2025-09-08 11:53 | Variasi: Hitam", "ok", True),
-        ("2 minggu lalu", "relatif", False),
-        ("kemarin", "relatif", False),
+        ("2 minggu lalu", "relatif_tanpa_acuan", False),
+        ("kemarin", "relatif_tanpa_acuan", False),
         ("07/03/2026", "tak_terparsing", False),
-        ("", "kosong", False),
+        ("", "tak_terparsing", False),
     ],
 )
 def test_parse_timestamp(raw: str, expected_status: str, has_time: bool) -> None:

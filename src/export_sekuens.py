@@ -199,7 +199,9 @@ def tentukan_alasan(df: pd.DataFrame, min_ulasan: int = 3) -> pd.Series:
     alasan = pd.Series("", index=df.index, dtype=object)
     kosong = to_bool(df["text_proposal_kosong"], "text_proposal_kosong")
     include = to_bool(df["include_for_inference"], "include_for_inference")
-    ts_ok = (df["timestamp_status"].astype(str).str.strip() == "ok") & parse_timestamp(df["timestamp"]).notna()
+    ts_ok = df["timestamp_status"].astype(str).str.strip().isin(
+        ("ok", "relatif_dikonversi")
+    ) & parse_timestamp(df["timestamp"]).notna()
 
     alasan[kosong] = ALASAN_TEKS_KOSONG
     alasan[(alasan == "") & ~include] = ALASAN_BUKAN_INCLUDE
@@ -212,7 +214,7 @@ def tentukan_alasan(df: pd.DataFrame, min_ulasan: int = 3) -> pd.Series:
 
 
 def urutkan_sekuens(df: pd.DataFrame) -> pd.Index:
-    """Index baris terurut: product_id, timestamp naik, row_order, review_id."""
+    """Timestamp, source_file, row_order; review_id terakhir untuk input lama."""
     kunci = pd.DataFrame(
         {
             "product_id": df["product_id"].astype(str),
@@ -222,7 +224,10 @@ def urutkan_sekuens(df: pd.DataFrame) -> pd.Index:
         },
         index=df.index,
     )
-    return kunci.sort_values(["product_id", "ts", "row_order", "review_id"], kind="mergesort").index
+    if "source_file" in df:
+        kunci["source_file"] = df["source_file"].astype(str)
+    order = ["product_id", "ts"] + (["source_file"] if "source_file" in kunci else [])
+    return kunci.sort_values(order + ["row_order", "review_id"], kind="mergesort").index
 
 
 def bangun_audit(df: pd.DataFrame, min_ulasan: int = 3) -> pd.DataFrame:
@@ -500,7 +505,7 @@ def format_laporan(ctx: dict) -> str:
         "- Input dibaca sebagai teks; nilai kolom (termasuk p_*) disalin apa adanya ke A dan B, tanpa pembulatan.",
         "- Kolom probabilitas dipilih menurut nama; urutan A mengikuti proposal: p_positif, p_netral, p_negatif.",
         "- Timestamp diurai sebagai ISO 8601 (tanggal saja dianggap pukul 00:00:00); kosong/tak terbaca = tidak valid.",
-        "- Pemecah seri: timestamp, lalu row_order (numerik), lalu review_id (urutan string).",
+        "- Pemecah seri: timestamp, source_file (bila tersedia), row_order (numerik), review_id.",
         "- Ambang produk dihitung setelah alasan 1 sampai 3 diterapkan.",
         "- product_id baru dibentuk sebelum penyaringan dan pengurutan; produk di A terurut menurut product_id baru "
         "(urutan string, peka huruf besar/kecil).",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,7 +19,6 @@ from .file_map import (
     read_raw_csv,
 )
 from .schema import (
-    DATE_REL_RE,
     SELLER_STYLE_RE,
     ROLE_ASPECT,
     ROLE_REVIEW,
@@ -51,6 +51,10 @@ OUTPUT_COLUMNS = [
     "timestamp_has_time",
     "timestamp_raw",
     "timestamp_status",
+    "timestamp_is_estimated",
+    "timestamp_anchor",
+    "timestamp_anchor_source",
+    "timestamp_relative_raw",
     "row_order",
     "source_file",
     "fragment_cols",
@@ -87,24 +91,58 @@ TRUTHY = {"ya", "y", "1", "true", "x", "setuju"}
 # TIMESTAMP
 # ============================================================
 
+# Terpisah dari classifier fragmen agar perubahan parser tidak mengubah teks.
+RELATIVE_RE = re.compile(
+    r"(?:(\d+)\s*(menit|jam|hari|minggu|bulan|tahun)|se(minggu|bulan))"
+    r"\s*(?:yang\s+)?lalu", re.I,
+)
+TIMESTAMP_STATUSES = ("ok", "relatif_dikonversi", "relatif_tanpa_acuan", "tak_terparsing")
+ANCHOR_SOURCES = ("scrape_dates.csv", "mtime", "tidak_ada")
+
+
+def relative_parts(raw: str) -> tuple[int, str] | None:
+    value = str(raw).split("|", 1)[0].strip().casefold()
+    if value in ("kemarin", "hari ini"):
+        return (1 if value == "kemarin" else 0), "hari"
+    match = RELATIVE_RE.fullmatch(value)
+    if match:
+        return (1, match[3]) if match[3] else (int(match[1]), match[2])
+    return None
+
+
 def parse_timestamp(
     raw: str,
     formats: tuple[str, ...],
+    anchor: pd.Timestamp | None = None,
 ) -> tuple[pd.Timestamp, bool, str]:
     """
     Kembalikan (timestamp, punya_jam, status).
-    status: ok | kosong | relatif | tak_terparsing
+    status: ok | relatif_dikonversi | relatif_tanpa_acuan | tak_terparsing
     Bagian setelah '|' (mis. "| Variasi: Hitam") dibuang dulu.
-    Tanggal relatif ("2 minggu lalu") TIDAK ditebak -> NaT.
+    Relatif memakai anchor yang diberikan; tidak membaca jam sistem.
+    Jam/menit memakai tanggal anchor (ketelitian tanggal, sesuai kebijakan).
     """
 
     value = str(raw).split("|", 1)[0].strip()
 
-    if not value:
-        return pd.NaT, False, "kosong"
-
-    if DATE_REL_RE.match(value):
-        return pd.NaT, False, "relatif"
+    relative = relative_parts(value)
+    if relative is not None:
+        if anchor is None or pd.isna(anchor):
+            return pd.NaT, False, "relatif_tanpa_acuan"
+        n, unit = relative
+        date = pd.Timestamp(anchor).normalize()
+        try:
+            if unit in ("menit", "jam"):
+                parsed = date
+            elif unit in ("hari", "minggu"):
+                parsed = date - pd.Timedelta(days=n * (7 if unit == "minggu" else 1))
+            else:
+                parsed = date - pd.DateOffset(**{"months" if unit == "bulan" else "years": n})
+            # Pastikan dapat disimpan di kolom datetime64[ns].
+            _ = parsed.value
+        except (ValueError, OverflowError):
+            return pd.NaT, False, "tak_terparsing"
+        return parsed.normalize(), False, "relatif_dikonversi"
 
     for fmt in formats:
         try:
@@ -116,6 +154,105 @@ def parse_timestamp(
         return pd.Timestamp(parsed), has_time, "ok"
 
     return pd.NaT, False, "tak_terparsing"
+
+
+def load_scrape_dates(config: CleaningConfig) -> dict[str, pd.Timestamp]:
+    """Tanggal ISO eksplisit menang; input invalid/duplikat dihentikan, tidak ditebak."""
+    path = config.scrape_dates_path
+    if path is None or not Path(path).exists():
+        return {}
+    table = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    if not {"file", "tanggal_scrape"}.issubset(table.columns):
+        raise ValueError("scrape_dates.csv wajib berkolom file,tanggal_scrape")
+    if table["file"].duplicated().any() or table["file"].eq("").any():
+        raise ValueError("scrape_dates.csv: nama file kosong atau duplikat")
+    anchors = {}
+    for row in table.itertuples():
+        try:
+            # fromisoformat tidak menerima tanggal parsial atau kata relatif.
+            anchor = pd.Timestamp(datetime.fromisoformat(row.tanggal_scrape))
+            if anchor.tzinfo is not None:
+                anchor = anchor.tz_convert(config.timestamp_timezone).tz_localize(None)
+            _ = anchor.value
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"tanggal_scrape invalid untuk {row.file}: {row.tanggal_scrape!r}") from exc
+        anchors[row.file] = anchor
+    return anchors
+
+
+def resolve_timestamp_anchor(
+    path: Path,
+    latest_absolute: pd.Timestamp,
+    config: CleaningConfig,
+    explicit: dict[str, pd.Timestamp],
+) -> dict:
+    """Audit mtime terlebih dahulu; mtime anomali tidak pernah menjadi anchor."""
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+        mtime = pd.Timestamp(mtime_ns, unit="ns", tz="UTC").tz_convert(
+            config.timestamp_timezone
+        ).tz_localize(None)
+    except OSError:
+        mtime_ns, mtime = None, pd.NaT
+    anomaly = bool(pd.notna(mtime) and pd.notna(latest_absolute) and mtime < latest_absolute)
+    if path.name in explicit:
+        anchor, source = explicit[path.name], "scrape_dates.csv"
+    elif pd.notna(mtime) and not anomaly:
+        anchor, source = mtime, "mtime"
+    else:
+        anchor, source = pd.NaT, "tidak_ada"
+    return {
+        "file": path.name,
+        "mtime_ns": str(mtime_ns) if mtime_ns is not None else "",
+        "mtime_local": mtime,
+        "timezone": config.timestamp_timezone,
+        "latest_absolute": latest_absolute,
+        "mtime_anomaly": anomaly,
+        "timestamp_anchor": anchor.normalize() if pd.notna(anchor) else pd.NaT,
+        "timestamp_anchor_source": source,
+        "anchor_reason": "override eksplisit" if source == "scrape_dates.csv" else (
+            "mtime lebih lama dari tanggal absolut terbaru" if anomaly else (
+                "mtime tersedia" if source == "mtime" else "mtime tidak tersedia"
+            )
+        ),
+    }
+
+
+def audit_timestamp_anchors(config: CleaningConfig) -> pd.DataFrame:
+    """Audit semua CSV (termasuk yang dikecualikan); scan seluruh sel absolut.
+
+    Snapshot mtime, zona waktu, hash isi, dan pilihan anchor menjadi provenance
+    untuk reproduksi. Tidak menyimpulkan tanggal dari web_scraper_order.
+    """
+    explicit = load_scrape_dates(config)
+    rows = []
+    for path in sorted(Path(config.raw_dir).glob("*.csv")):
+        frame, _ = read_raw_csv(path)
+        absolute = []
+        for value in pd.unique(frame.to_numpy().ravel()):
+            if re.match(r"^\s*\d{4}-\d{2}-\d{2}", str(value)):
+                stamp, _, status = parse_timestamp(value, config.timestamp_formats)
+                if status == "ok":
+                    absolute.append(stamp)
+        row = resolve_timestamp_anchor(path, max(absolute, default=pd.NaT), config, explicit)
+        row["sha256"] = file_sha256(path)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def timestamp_fields(raw: str, config: CleaningConfig, anchor_info: dict) -> dict:
+    """Kolom timestamp satu baris; provenance anchor hanya untuk pola relatif."""
+    is_relative = relative_parts(raw) is not None
+    anchor = anchor_info["timestamp_anchor"] if is_relative else pd.NaT
+    source = anchor_info["timestamp_anchor_source"] if is_relative else "tidak_ada"
+    stamp, has_time, status = parse_timestamp(raw, config.timestamp_formats, anchor)
+    return {
+        "timestamp": stamp, "timestamp_has_time": has_time,
+        "timestamp_raw": raw, "timestamp_status": status,
+        "timestamp_is_estimated": status == "relatif_dikonversi",
+        "timestamp_anchor": anchor, "timestamp_anchor_source": source,
+        "timestamp_relative_raw": raw if is_relative else "",
+    }
 
 
 # ============================================================
@@ -167,6 +304,7 @@ class BuildResult:
     review_fragments: pd.DataFrame
     excluded_files: pd.DataFrame
     skipped_no_review: list[str] = field(default_factory=list)
+    anchor_audit: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 # ============================================================
@@ -189,6 +327,7 @@ def build_file_rows(
     column_profiles: pd.DataFrame,
     config: CleaningConfig,
     aspect_vocab: set[str],
+    anchor_info: dict | None = None,
 ) -> tuple[list[dict], dict, Counter, list[dict]]:
     """
     Ubah satu CSV menjadi baris review.
@@ -275,10 +414,9 @@ def build_file_rows(
             continue
 
         ts_raw = str(values[ts_col][row_order]) if ts_col else ""
-        if ts_col:
-            ts_value, has_time, ts_status = parse_timestamp(ts_raw, config.timestamp_formats)
-        else:
-            ts_value, has_time, ts_status = pd.NaT, False, "tidak_ada_kolom"
+        fields = timestamp_fields(ts_raw, config, anchor_info or {
+            "timestamp_anchor": pd.NaT, "timestamp_anchor_source": "tidak_ada",
+        })
 
         rows.append(
             {
@@ -289,10 +427,7 @@ def build_file_rows(
                 "review": join_review(review_fragments, config.fragment_separator),
                 "_light_input": join_for_light(review_fragments),
                 "aspect_tags": " | ".join(aspect_tags),
-                "timestamp": ts_value,
-                "timestamp_has_time": has_time,
-                "timestamp_raw": ts_raw,
-                "timestamp_status": ts_status,
+                **fields,
                 "row_order": row_order,
                 "source_file": source_file,
                 "fragment_cols": " | ".join(fragment_cols),
@@ -344,6 +479,9 @@ def add_flags(
     # --------------------------------------------------------
 
     eligible = ~df["is_empty"] & df["timestamp"].notna()
+    # Estimasi tidak pernah membuktikan scrape ganda, termasuk opsi date-only.
+    if "timestamp_is_estimated" in df:
+        eligible &= ~df["timestamp_is_estimated"]
     if config.technical_dup_require_time:
         eligible &= df["timestamp_has_time"]
 
@@ -417,6 +555,8 @@ def build_all(
 
     aspect_vocab = load_aspect_vocab(config.aspect_tag_vocab_path)
     raw_dir = Path(config.raw_dir)
+    anchor_audit = audit_timestamp_anchors(config)
+    anchors = anchor_audit.set_index("file").to_dict(orient="index")
 
     # --------------------------------------------------------
     # 1. Integritas file (hash)
@@ -482,6 +622,7 @@ def build_all(
             "file_dup_group": dup_group_of.get(name, ""),
             "n_kolom": df.shape[1],
             "n_kolom_perlu_cek": int((profile_frame["role"] == "perlu_cek").sum()),
+            **{k: v for k, v in anchors[name].items() if k != "sha256"},
         }
 
         if not (profile_frame["role"] == ROLE_REVIEW).any():
@@ -498,7 +639,7 @@ def build_all(
             continue
 
         rows, stats, counts, frag_log = build_file_rows(
-            file_row, df, profile_frame, config, aspect_vocab
+            file_row, df, profile_frame, config, aspect_vocab, anchors[name]
         )
 
         for row in rows:
@@ -533,6 +674,7 @@ def build_all(
     reviews = reviews.drop(columns="_light_input")
 
     reviews["timestamp"] = pd.to_datetime(reviews["timestamp"]).astype("datetime64[ns]")
+    reviews["timestamp_anchor"] = pd.to_datetime(reviews["timestamp_anchor"]).astype("datetime64[ns]")
 
     reviews = add_flags(reviews, config)
     reviews = reviews[OUTPUT_COLUMNS]
@@ -551,10 +693,14 @@ def build_all(
         n_seller_reply_suspect=("seller_reply_suspect", "sum"),
         n_include=("include_for_inference", "sum"),
         n_timestamp_nat=("timestamp", lambda s: int(s.isna().sum())),
-        n_ts_relatif=("timestamp_status", lambda s: int((s == "relatif").sum())),
+        n_ts_relatif=("timestamp_status", lambda s: int(s.isin(TIMESTAMP_STATUSES[1:3]).sum())),
         n_ts_tak_terparsing=("timestamp_status", lambda s: int((s == "tak_terparsing").sum())),
         n_ts_dengan_jam=("timestamp_has_time", "sum"),
     )
+    for status in TIMESTAMP_STATUSES:
+        per_file[f"n_ts_{status}"] = reviews["timestamp_status"].eq(status).groupby(reviews["source_file"]).sum()
+    for source in ANCHOR_SOURCES:
+        per_file[f"n_anchor_{source}"] = reviews["timestamp_anchor_source"].eq(source).groupby(reviews["source_file"]).sum()
 
     manifest = manifest.merge(per_file, left_on="file", right_index=True, how="left")
 
@@ -594,4 +740,5 @@ def build_all(
         review_fragments=pd.DataFrame(fragments_log),
         excluded_files=excluded_files.sort_values("file", kind="mergesort").reset_index(drop=True),
         skipped_no_review=skipped_no_review,
+        anchor_audit=anchor_audit,
     )

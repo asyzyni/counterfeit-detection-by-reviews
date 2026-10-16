@@ -179,9 +179,10 @@ def build_cleaning_audit(
 
     for status, count in reviews["timestamp_status"].value_counts().sort_index().items():
         rows.append(_audit_row(
-            "6_timestamp", f"status {status}", n, n - (0 if status == "ok" else count),
+            "6_timestamp", f"status {status}", n,
+            n - (0 if status in ("ok", "relatif_dikonversi") else count),
             "baris",
-            f"{count} baris; selain 'ok' -> NaT (tidak ditebak)",
+            f"{count} baris; ok=absolut, relatif_dikonversi=estimasi; status lain -> NaT",
         ))
 
     return pd.DataFrame(rows)
@@ -207,7 +208,7 @@ def timestamp_format_report(
     frame = reviews.assign(pola=reviews["timestamp_raw"].map(pattern))
 
     report = (
-        frame.groupby(["schema_family", "pola", "timestamp_status"])
+        frame.groupby(["schema_family", "pola", "timestamp_status", "timestamp_anchor_source"])
         .agg(
             n_baris=("review_id", "size"),
             n_file=("source_file", "nunique"),

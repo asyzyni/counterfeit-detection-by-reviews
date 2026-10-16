@@ -26,6 +26,7 @@ debug_sentiment/
 # Datasets & Large Data Files
 # ==============================================================================
 *.csv
+!references/scrape_dates.csv
 *.parquet
 *.jsonl
 !requirements.txt

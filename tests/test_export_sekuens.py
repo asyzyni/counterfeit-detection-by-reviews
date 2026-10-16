@@ -76,6 +76,20 @@ def test_produk_dua_ulasan_keluar_tiga_masuk():
     assert set(a["product_id"]) == {"Toko_HP TIGA"}
 
 
+def test_relative_estimates_enter_sequences_with_source_file_tiebreak():
+    rows = [dict(_row(f"r{i}", "P", status="relatif_dikonversi", has_time=False,
+                      ts="2026-07-29", row_order=i), source_file=file)
+            for i, file in enumerate(["b.csv", "a.csv", "a.csv"])]
+    audit = _audit(rows)
+    assert audit.masuk_sekuens.eq("True").all()
+    assert audit.sort_values("seq_sekuens").review_id.tolist() == ["r1", "r2", "r0"]
+    shuffled = _audit([rows[2], rows[0], rows[1]])
+    pd.testing.assert_series_equal(
+        audit.set_index("review_id").seq_sekuens.sort_index(),
+        shuffled.set_index("review_id").seq_sekuens.sort_index(),
+    )
+
+
 def test_pemecah_seri_timestamp_row_order_review_id():
     rows = [
         _row("z", "P", ts="2026-01-02 00:00:00", row_order=0),

@@ -88,6 +88,8 @@ def write_outputs(
         "product_summary.csv": product_summary(result.reviews, config),
         "excluded_files.csv": result.excluded_files,
         "timestamp_formats.csv": timestamp_format_report(result.reviews),
+        "timestamp_anchor_audit.csv": result.anchor_audit,
+        "timestamp_anchor_anomalies.csv": result.anchor_audit.loc[result.anchor_audit["mtime_anomaly"]],
         "fragment_counts.csv": result.fragment_counts,
         "tabel_contoh.csv": export_tabel_contoh(result.reviews, n=3),
         "tabel_contoh_anonim.csv": export_tabel_contoh(result.reviews, n=3, anonimkan=True),
@@ -177,6 +179,8 @@ def parse_args(
     parser.add_argument("--raw-dir", type=Path, default=defaults.raw_dir)
     parser.add_argument("--mapping-filename", default=defaults.mapping_filename)
     parser.add_argument("--output-dir", type=Path, default=defaults.output_dir)
+    parser.add_argument("--scrape-dates", type=Path, default=defaults.scrape_dates_path)
+    parser.add_argument("--timestamp-timezone", default=defaults.timestamp_timezone)
     parser.add_argument("--min-review-length", type=int, default=defaults.min_review_length)
     parser.add_argument("--aspect-tag-vocab", type=Path, default=None,
                         help="daftar tag aspek yang disetujui (.txt atau .csv berkolom setuju)")
@@ -197,6 +201,8 @@ def parse_args(
         raw_dir=args.raw_dir,
         mapping_filename=args.mapping_filename,
         output_dir=args.output_dir,
+        scrape_dates_path=args.scrape_dates,
+        timestamp_timezone=args.timestamp_timezone,
         min_review_length=args.min_review_length,
         aspect_tag_vocab_path=args.aspect_tag_vocab,
         exclude_duplicate_file_groups=args.exclude_duplicate_file_groups,

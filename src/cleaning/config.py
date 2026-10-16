@@ -76,6 +76,10 @@ class CleaningConfig:
         "%Y-%m-%d",
     )
 
+    # Override eksplisit per nama CSV; berkas opsional, tanpa fallback ke now().
+    scrape_dates_path: Path | None = _REPO_DIR / "references" / "scrape_dates.csv"
+    timestamp_timezone: str = "Asia/Jakarta"
+
     # =========================================================
     # DETEKSI PERAN KOLOM (ambang profil nilai)
     # =========================================================

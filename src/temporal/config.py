@@ -19,7 +19,7 @@ class HMMConfig:
     timestamp_col: str = "timestamp"
     # Penentu urutan bila timestamp kembar. Dipakai berurutan; kolom yang tidak ada dilewati.
     # Harus sama dengan aturan urutan di cleaning/RM 1 (seq_in_product).
-    tiebreak_cols: tuple[str, ...] = ("seq_in_product", "row_order")
+    tiebreak_cols: tuple[str, ...] = ("source_file", "row_order", "seq_in_product")
     # Urutan observasi o_t = [S+, S~, S-] seperti proposal (BUKAN urutan kolom RM 1).
     prob_cols: tuple[str, str, str] = ("p_positif", "p_netral", "p_negatif")
     logit_cols: tuple[str, str, str] = ("logit_positif", "logit_netral", "logit_negatif")
