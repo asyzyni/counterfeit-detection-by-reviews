@@ -2,6 +2,8 @@
 
 Tanggal eksekusi: 3 Oktober 2026
 
+**Catatan konfigurasi 16 Oktober 2026:** laporan di bawah adalah catatan eksekusi historis. Inferensi RM 1 kini membaca panjang dari `ExperimentConfig.sentiment_max_length=128`, sesuai fine-tuning, dengan kapasitas model 512 sebagai batas terpisah. Perbedaan panjang harus disetujui lewat `--allow-length-mismatch` dan dicatat dalam metadata. v2 berjalan dengan 512, digantikan oleh keputusan 128; metadata v3/v4 mencatat 128. v5 menggabung ulang timestamp tanpa inferensi ulang dan prediksinya cocok dengan v4 melalui `review_id`. Provenance v5 tidak memiliki field `max_length`; penetapan 128 bersumber dari metadata v4 dan pembandingan prediksi. Pemotongan v4/v5 adalah 123 dari 73.184 ulasan yang diinferensi (0,17%).
+
 ## 1. Struktur data dan path
 
 Folder sumber yang diminta dapat diakses di `/Users/asyzyni/Desktop/TA /Kode dan Eksperimen/Data TA`. Saat diperiksa sebelum run, folder tersebut berisi 593 CSV mentah secara langsung di root dan tidak memiliki subfolder, hasil `cleaned_reviews`, manifest, maupun artefak model/checkpoint. Pemeriksaan mencari `config.json`, `model.safetensors`, `pytorch_model.bin`, dan nama checkpoint, tetapi tidak menemukan model tersimpan.

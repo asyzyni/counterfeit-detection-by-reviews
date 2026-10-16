@@ -33,6 +33,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from .config import ExperimentConfig
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -43,7 +45,7 @@ LOGGER = logging.getLogger(__name__)
 REPO_ID = "asyzyni/indobert-nlu-smsa-counterfeit-ta"
 REVISION_ENV = "INDOBERT_SENTIMENT_REVISION"
 TOKEN_ENV = "HF_TOKEN"
-MAX_LENGTH = 512
+MAX_LENGTH = ExperimentConfig.__dataclass_fields__["sentiment_max_length"].default
 MAX_LENGTH_PELATIHAN = 128  # Sumber: konteks fine-tuning dari pengguna.
 
 LABEL_SEMANTICS_SENTENCES = (
@@ -167,6 +169,29 @@ def check_max_length(max_length: int, max_position_embeddings: int | None) -> No
         )
 
 
+def check_training_length(max_length: int, *, allow_length_mismatch: bool = False) -> dict:
+    """Wajibkan persetujuan eksplisit untuk panjang yang berbeda dari fine-tuning."""
+
+    mismatch = max_length != MAX_LENGTH_PELATIHAN
+    warning = None
+    if mismatch:
+        warning = (
+            f"PERINGATAN: max_length inferensi {max_length} berbeda dari "
+            f"max_length pelatihan {MAX_LENGTH_PELATIHAN}. "
+            "Wajib --allow-length-mismatch (API: allow_length_mismatch=True)."
+        )
+        LOGGER.warning(warning)
+        if not allow_length_mismatch:
+            raise ModelCheckError(warning)
+    return {
+        "max_length": max_length,
+        "max_length_pelatihan": MAX_LENGTH_PELATIHAN,
+        "length_mismatch": mismatch,
+        "allow_length_mismatch": bool(allow_length_mismatch),
+        "length_mismatch_warning": warning,
+    }
+
+
 def pick_device(requested: str, cuda_available: bool, mps_available: bool) -> str:
     """Pilih device tanpa fallback diam-diam ke CPU."""
 
@@ -209,6 +234,7 @@ class SentimentModelConfig:
     token_env: str = TOKEN_ENV
     strict_tokenizer_check: bool = True  # kompatibilitas; tokenizer hanya informasi
     allow_download: bool = True
+    allow_length_mismatch: bool = False
 
 
 @dataclass
@@ -221,6 +247,7 @@ class SentimentBundle:
     batch_size: int = 16
     meta: dict = field(default_factory=dict)
     max_position_embeddings: int = 512
+    allow_length_mismatch: bool = False
 
 
 def _has_required_files(path: Path) -> list[str]:
@@ -279,7 +306,7 @@ def resolve_model_path(config: SentimentModelConfig) -> tuple[str, str | None]:
 
 
 def load_sentiment_model(config: SentimentModelConfig | None = None) -> SentimentBundle:
-    """Muat model fp32/eval; default inferensi 512, dibatasi kapasitas posisi model."""
+    """Muat model fp32/eval; panjang dari ExperimentConfig, dibatasi kapasitas model."""
 
     cfg = config or SentimentModelConfig()
 
@@ -292,6 +319,9 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
     model_config = AutoConfig.from_pretrained(path, local_files_only=True)
     max_positions = getattr(model_config, "max_position_embeddings", None)
     check_max_length(cfg.max_length, max_positions)
+    length_meta = check_training_length(
+        cfg.max_length, allow_length_mismatch=cfg.allow_length_mismatch,
+    )
     if int(getattr(model_config, "num_labels", 0)) != 3:
         raise ModelCheckError(f"Model harus punya 3 kelas; num_labels={model_config.num_labels}")
     sentiment_indices = check_label_mapping(model_config.id2label)
@@ -324,8 +354,7 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
         "model_path": path,
         "device": device,
         "dtype": "float32",
-        "max_length": cfg.max_length,
-        "max_length_pelatihan": MAX_LENGTH_PELATIHAN,
+        **length_meta,
         "tokenizer_model_max_length": getattr(tokenizer, "model_max_length", None),
         "max_position_embeddings": max_positions,
         "id2label": {int(k): str(v) for k, v in model_config.id2label.items()},
@@ -341,6 +370,7 @@ def load_sentiment_model(config: SentimentModelConfig | None = None) -> Sentimen
         batch_size=cfg.batch_size,
         meta=meta,
         max_position_embeddings=max_positions,
+        allow_length_mismatch=cfg.allow_length_mismatch,
     )
 
 
@@ -386,6 +416,9 @@ def predict_sentiment_probs(
     if bundle is None:
         bundle = load_sentiment_model(config)
     check_max_length(bundle.max_length, bundle.max_position_embeddings)
+    bundle.meta.update(check_training_length(
+        bundle.max_length, allow_length_mismatch=bundle.allow_length_mismatch,
+    ))
     size = bundle.batch_size if batch_size is None else batch_size
     if size <= 0:
         raise ValueError("batch_size harus lebih besar dari 0")
@@ -643,19 +676,50 @@ KETERBATASAN = (
     "Model difine-tune pada SmSA (ulasan umum), bukan ulasan marketplace. Kualitas pada domain "
     "ulasan ponsel BELUM terukur; evaluasi domain memerlukan sampel berlabel manual (rencana 150 baris, "
     "bukan dari rating bintang). Angka di sini adalah distribusi keluaran model, bukan akurasi. "
-    "Jangan mengklaim akurasi di domain marketplace. "
-    "Model difine-tune dengan max_length 128; inferensi memakai 512 sesuai proposal; "
-    "perilaku pada ulasan > 128 token tidak divalidasi."
+    "Jangan mengklaim akurasi di domain marketplace."
 )
+
+
+def format_length_note(summary: dict | None, meta: dict) -> str:
+    """Narasi panjang aktual; jangan menyamakan kapasitas posisi dengan panjang inferensi."""
+
+    inference = meta.get("max_length", (summary or {}).get("max_length"))
+    training = meta.get("max_length_pelatihan", MAX_LENGTH_PELATIHAN)
+    capacity = meta.get("max_position_embeddings", "tidak tercatat")
+    if summary is not None and inference != summary["max_length"]:
+        raise ValueError("max_length meta dan ringkasan berbeda; laporan tidak diterbitkan")
+    if inference is None:
+        return "Panjang inferensi tidak tercatat."
+    if inference == training:
+        note = (
+            f"Fine-tuning dan inferensi memakai max_length {inference} "
+            f"(kapasitas model {capacity})."
+        )
+    else:
+        note = (
+            f"PERINGATAN: Fine-tuning memakai max_length {training}; inferensi memakai "
+            f"max_length {inference} (kapasitas model {capacity}). "
+            "Panjang inferensi berbeda dari pelatihan."
+        )
+    if summary is not None:
+        percent = summary["persen_terpotong"]
+        percent_text = "tidak tersedia" if percent is None else f"{percent:.2f}".replace(".", ",") + "%"
+        note += (
+            f" Ulasan > {inference} token dipotong "
+            f"({summary['n_terpotong']} ulasan, {percent_text})."
+        )
+    return note
 
 
 def format_summary_md(summary: dict | None, meta: dict, checks: list[dict] | None = None) -> str:
     """Ringkasan sanity check dalam Markdown (Bahasa Indonesia)."""
 
+    length_note = format_length_note(summary, meta)
     lines = ["# Ringkasan inferensi sentimen (RM 1)", ""]
     lines += ["## Model dan lingkungan", ""]
     for key in ("repo_id", "revision", "model_path", "device", "dtype", "max_length",
                 "max_length_pelatihan", "tokenizer_model_max_length", "max_position_embeddings",
+                "length_mismatch", "allow_length_mismatch", "length_mismatch_warning",
                 "torch", "transformers"):
         if key in meta:
             value = f'"{meta[key]}"' if key == "model_path" else meta[key]
@@ -669,7 +733,8 @@ def format_summary_md(summary: dict | None, meta: dict, checks: list[dict] | Non
         lines += ["", "## Pemeriksaan model", ""]
         for check in checks or []:
             lines.append(f"- [{'OK' if check['lulus'] else 'GAGAL'}] {check['nama']}: {check['detail']}")
-        return "\n".join(lines + ["", "## Keterbatasan", "", KETERBATASAN, ""])
+        return "\n".join(lines + ["", "## Keterbatasan", "", KETERBATASAN,
+                                  "", length_note, ""])
     lines += ["", "## Sanity check", ""]
     lines += [
         f"- Baris total: {summary['n_total']:,}",
@@ -694,5 +759,5 @@ def format_summary_md(summary: dict | None, meta: dict, checks: list[dict] | Non
         lines += ["", "## Pemeriksaan model", "", "| Pemeriksaan | Lulus | Detail |", "| --- | :-: | --- |"]
         for check in checks:
             lines.append(f"| {check['nama']} | {'ya' if check['lulus'] else 'TIDAK'} | {check['detail']} |")
-    lines += ["", "## Keterbatasan", "", KETERBATASAN, ""]
+    lines += ["", "## Keterbatasan", "", KETERBATASAN, "", length_note, ""]
     return "\n".join(lines)

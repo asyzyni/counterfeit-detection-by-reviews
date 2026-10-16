@@ -74,7 +74,7 @@ def make_bundle(indices=None, tokenizer=None, batch_size=4, bad=None):
 
     return si.SentimentBundle(
         tokenizer=tokenizer, forward=forward, sentiment_indices=indices,
-        device="cpu", max_length=512, batch_size=batch_size,
+        device="cpu", max_length=si.MAX_LENGTH, batch_size=batch_size,
         meta={"id2label": {0: "negatif", 1: "netral", 2: "positif"}, "device": "cpu"},
     ), table
 
@@ -160,13 +160,45 @@ class LabelMappingTests(unittest.TestCase):
 
 
 class TokenizerAndDeviceTests(unittest.TestCase):
+    def test_default_length_matches_config_and_training(self):
+        from src.config import ExperimentConfig
+
+        self.assertEqual(ExperimentConfig().sentiment_max_length, 128)
+        self.assertEqual(si.MAX_LENGTH, ExperimentConfig().sentiment_max_length)
+        self.assertEqual(si.MAX_LENGTH, si.MAX_LENGTH_PELATIHAN)
+        self.assertEqual(si.SentimentModelConfig().max_length, si.MAX_LENGTH)
+        self.assertEqual(run_mod.build_parser().parse_args([]).max_length, si.MAX_LENGTH)
+
+    def test_training_length_requires_override_and_warns(self):
+        with self.assertLogs(si.LOGGER, level="WARNING") as logs:
+            with self.assertRaisesRegex(si.ModelCheckError, "--allow-length-mismatch"):
+                si.check_training_length(256)
+        self.assertIn("PERINGATAN", logs.output[0])
+        with self.assertLogs(si.LOGGER, level="WARNING"):
+            meta = si.check_training_length(256, allow_length_mismatch=True)
+        self.assertTrue(meta["length_mismatch"])
+        self.assertTrue(meta["allow_length_mismatch"])
+        self.assertEqual(meta["max_length_pelatihan"], 128)
+        self.assertIn("256", meta["length_mismatch_warning"])
+        self.assertFalse(si.check_training_length(128)["length_mismatch"])
+
+    def test_load_rejects_mismatch_before_loading_weights(self):
+        fake_transformers = SimpleNamespace(
+            AutoConfig=Mock(), AutoTokenizer=Mock(), AutoModelForSequenceClassification=Mock())
+        fake_transformers.AutoConfig.from_pretrained.return_value = SimpleNamespace(max_position_embeddings=512)
+        with patch.dict("sys.modules", {"torch": Mock(), "transformers": fake_transformers}), \
+                patch.object(si, "resolve_model_path", return_value=("fake", None)):
+            with self.assertRaisesRegex(si.ModelCheckError, "--allow-length-mismatch"):
+                si.load_sentiment_model(si.SentimentModelConfig(max_length=256))
+        fake_transformers.AutoModelForSequenceClassification.from_pretrained.assert_not_called()
+
     def test_tokenizer_check(self):
         for length in (128, 512, int(1e30)):
             with self.assertLogs(si.LOGGER, level="INFO"):
                 self.assertTrue(si.check_tokenizer(FakeTokenizer(length), 512))
 
     def test_capacity_limit_rejects_invalid_length(self):
-        self.assertEqual(si.SentimentModelConfig().max_length, 512)
+        self.assertEqual(si.SentimentModelConfig().max_length, 128)
         si.check_max_length(512, 512)
         for length in (513, 0, -1, True):
             with self.assertRaises(si.ModelCheckError):
@@ -199,6 +231,19 @@ class TokenizerAndDeviceTests(unittest.TestCase):
 
 
 class PredictTests(unittest.TestCase):
+    def test_manual_bundle_cannot_bypass_length_guard(self):
+        bundle, _ = make_bundle()
+        bundle.max_length = 256
+        with patch.object(bundle, "forward", wraps=bundle.forward) as forward:
+            with self.assertRaisesRegex(si.ModelCheckError, "--allow-length-mismatch"):
+                si.predict_sentiment_probs(TEXTS, bundle=bundle)
+            forward.assert_not_called()
+            bundle.allow_length_mismatch = True
+            si.predict_sentiment_probs(TEXTS, bundle=bundle)
+            forward.assert_called()
+        self.assertTrue(bundle.meta["length_mismatch"])
+        self.assertTrue(bundle.meta["allow_length_mismatch"])
+
     def test_shape_sum_finite_and_matches_manual_softmax(self):
         bundle, table = make_bundle()
         out = si.predict_sentiment_probs(TEXTS, bundle=bundle)
@@ -250,12 +295,12 @@ class PredictTests(unittest.TestCase):
         texts = ["kata " * count for count in (600, 127, 510, 511, 126)]
         out = si.predict_sentiment_probs(texts, bundle=bundle, batch_size=2, return_diagnostics=True)
         self.assertEqual(out["n_token"].tolist(), [602, 129, 512, 513, 128])
-        self.assertEqual(out["terpotong"].tolist(), [True, False, False, True, False])
-        self.assertEqual(tok.seen_lengths, [129, 512, 512])  # sort panjang + padding dinamis
-        self.assertTrue(all(call[:3] == (True, True, 512) for call in tok.batch_calls))
-        summary = si.summarize_predictions(pd.Series(texts), out, max_length=512)
-        self.assertEqual(summary["n_terpotong"], 2)
-        self.assertEqual(summary["persen_terpotong"], 40.0)
+        self.assertEqual(out["terpotong"].tolist(), [True, True, True, True, False])
+        self.assertEqual(tok.seen_lengths, [128, 128, 128])  # sort panjang + padding dinamis
+        self.assertTrue(all(call[:3] == (True, True, 128) for call in tok.batch_calls))
+        summary = si.summarize_predictions(pd.Series(texts), out, max_length=bundle.max_length)
+        self.assertEqual(summary["n_terpotong"], 4)
+        self.assertEqual(summary["persen_terpotong"], 80.0)
         self.assertTrue(out[list(si.PROB_COLUMNS)].notna().all().all())
 
     def test_logits_returned_in_same_order_as_probs(self):
@@ -303,12 +348,34 @@ class LabelSemanticsTests(unittest.TestCase):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_report_uses_actual_lengths_and_truncation_counts(self):
+        bundle, _ = make_bundle()
+        texts = pd.Series(["bagus", "kata " * 200])
+        probs = si.predict_sentiment_probs(texts, bundle=bundle, return_diagnostics=True)
+        summary = si.summarize_predictions(texts, probs, max_length=bundle.max_length)
+        meta = {**bundle.meta, "max_position_embeddings": 512}
+        report = si.format_summary_md(summary, meta)
+        self.assertIn("Fine-tuning dan inferensi memakai max_length 128 (kapasitas model 512).", report)
+        self.assertIn("Ulasan > 128 token dipotong (1 ulasan, 50,00%).", report)
+        self.assertNotIn("inferensi memakai 512 sesuai proposal", report)
+
+        # Meta 256 harus menghasilkan narasi 256, bukan angka bawaan modul.
+        summary = {**summary, "max_length": 256, "n_terpotong": 0, "persen_terpotong": 0.0}
+        meta = {**meta, "max_length": 256}
+        report = si.format_summary_md(summary, meta)
+        self.assertIn("PERINGATAN: Fine-tuning memakai max_length 128; inferensi memakai max_length 256", report)
+        self.assertIn("Ulasan > 256 token dipotong (0 ulasan, 0,00%).", report)
+
+    def test_report_rejects_conflicting_metadata(self):
+        with self.assertRaisesRegex(ValueError, "meta dan ringkasan berbeda"):
+            si.format_summary_md({"max_length": 128}, {"max_length": 256})
+
     def test_summary_counts(self):
         bundle, _ = make_bundle()
         long_text = " ".join(f"k{i}" for i in range(600))
         texts = pd.Series(["bagus", "", None, "barang bagus sekali", long_text, "ok mantap"])
         probs = si.predict_sentiment_probs(texts, bundle=bundle, return_diagnostics=True)
-        summary = si.summarize_predictions(texts, probs, max_length=512, short_words=2)
+        summary = si.summarize_predictions(texts, probs, max_length=bundle.max_length, short_words=2)
         self.assertEqual(summary["n_total"], 6)
         self.assertEqual(summary["n_kosong"], 2)
         self.assertEqual(summary["n_diinferensi"], 4)
@@ -320,6 +387,52 @@ class SummaryTests(unittest.TestCase):
 
 
 class SafetyTests(unittest.TestCase):
+    def test_import_does_not_construct_config_or_access_data(self):
+        import subprocess
+        import sys
+        import textwrap
+
+        # Dependensi dimuat sebelum guard; src.config dan modul inferensi tetap
+        # diimpor baru. Pembacaan modul Python terpisah dari I/O data aplikasi.
+        script = textwrap.dedent('''
+            import json
+            import dataclasses
+            import numpy
+            import pandas
+            from contextlib import ExitStack
+            from unittest.mock import patch
+
+            guards = []
+            real_dataclass = dataclasses.dataclass
+            with ExitStack() as stack:
+                def guarded_dataclass(cls):
+                    cls = real_dataclass(cls)
+                    if cls.__module__ == "src.config" and cls.__name__ == "ExperimentConfig":
+                        for name in ("__init__", "setup", "validate", "create_directories"):
+                            guards.append(stack.enter_context(patch.object(
+                                cls, name, side_effect=AssertionError("import memanggil " + name))))
+                    return cls
+                stack.enter_context(patch("dataclasses.dataclass", side_effect=guarded_dataclass))
+                for name in ("builtins.open", "io.open", "os.open", "os.mkdir", "os.makedirs",
+                             "pathlib.Path.open", "pathlib.Path.read_text", "pathlib.Path.read_bytes",
+                             "pathlib.Path.mkdir", "pandas.read_csv", "pandas.read_parquet", "numpy.load"):
+                    guards.append(stack.enter_context(patch(
+                        name, side_effect=AssertionError("I/O saat import: " + name))))
+                import src.sentiment_inference as imported
+                from src.config import ExperimentConfig
+                assert imported.MAX_LENGTH == 128
+                assert imported.MAX_LENGTH == ExperimentConfig.__dataclass_fields__["sentiment_max_length"].default
+            print(json.dumps({"max_length": imported.MAX_LENGTH,
+                              "guarded_calls": sum(mock.call_count for mock in guards),
+                              "guards": len(guards)}))
+        ''')
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", script], capture_output=True, text=True,
+            cwd=Path(__file__).resolve().parents[1], check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"max_length": 128, "guarded_calls": 0, "guards": 16})
+
     def test_training_args_never_downloaded(self):
         self.assertNotIn("training_args.bin", si.DOWNLOAD_PATTERNS)
         self.assertFalse(any(p.endswith((".bin", ".pt", ".pkl", ".pth")) for p in si.DOWNLOAD_PATTERNS))
@@ -375,7 +488,7 @@ class RunCliTests(unittest.TestCase):
             self.assertEqual(summary["ringkasan"]["n_total"], 8)
             self.assertEqual(summary["meta"]["max_length_pelatihan"], 128)
             self.assertEqual(summary["meta"]["tokenizer_model_max_length"], 128)
-            self.assertEqual(summary["meta"]["max_length"], 512)
+            self.assertEqual(summary["meta"]["max_length"], 128)
             semantics = [c for c in summary["pemeriksaan"] if "kalimat" in c]
             self.assertEqual(len(semantics), 3)
             self.assertTrue((Path(tmp) / "out" / "hasil_ringkasan.md").is_file())
@@ -407,22 +520,40 @@ class RunCliTests(unittest.TestCase):
     def test_continue_preserves_failed_checks_and_custom_length(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_input(tmp)
-            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "256"})
+            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "256",
+                                     "--allow-length-mismatch": True})
             self.assertEqual(run_mod.run(args, bundle=make_semantic_bundle(swapped=True)), run_mod.EXIT_OK)
             summary = json.loads((Path(tmp) / "out" / "hasil_ringkasan.json").read_text())
             self.assertEqual(summary["meta"]["max_length"], 256)
+            self.assertTrue(summary["meta"]["length_mismatch"])
+            self.assertTrue(summary["meta"]["allow_length_mismatch"])
+            self.assertIn("PERINGATAN", summary["meta"]["length_mismatch_warning"])
             self.assertFalse(all(c["lulus"] for c in summary["pemeriksaan"]))
+
+    def test_length_mismatch_requires_flag_even_if_checks_are_bypassed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_input(tmp)
+            bundle = make_semantic_bundle()
+            bundle.allow_length_mismatch = True  # Persetujuan CLI tetap diperlukan.
+            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "256"})
+            with patch.object(bundle, "forward", wraps=bundle.forward) as forward, \
+                    self.assertLogs(si.LOGGER, level="WARNING") as logs:
+                self.assertEqual(run_mod.run(args, bundle=bundle), run_mod.EXIT_CHECK_FAILED)
+                forward.assert_not_called()
+            self.assertIn("PERINGATAN", logs.output[0])
+            self.assertFalse((Path(tmp) / "out").exists())
 
     def test_capacity_cannot_be_bypassed(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_input(tmp)
-            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "513"})
+            args = self._args(tmp, **{"--continue-on-failed-checks": True, "--max-length": "513",
+                                     "--allow-length-mismatch": True})
             self.assertEqual(run_mod.run(args, bundle=make_semantic_bundle()), run_mod.EXIT_CHECK_FAILED)
             self.assertFalse((Path(tmp) / "out" / "hasil.csv").exists())
 
     def test_defaults_and_missing_proposal_column(self):
         args = run_mod.build_parser().parse_args([])
-        self.assertEqual(args.max_length, 512)
+        self.assertEqual(args.max_length, 128)
         self.assertEqual(args.text_col, "text_proposal")
         self.assertEqual(Path(args.input).name, "reviews_clean_v2.parquet")
         self.assertEqual(Path(args.output).name, "sentimen_ulasan_v2.csv")

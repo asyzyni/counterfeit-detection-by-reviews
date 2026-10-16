@@ -196,3 +196,58 @@ def verify_original_columns(original: pd.DataFrame, updated: pd.DataFrame) -> No
         raise ValueError("BERHENTI: jumlah, urutan, tipe, atau nilai kolom lama berbeda; minta konfirmasi pengguna")
 
 
+def format_proposal_report(table: pd.DataFrame, stats: dict, input_path: Path,
+                           output_path: Path | None, dictionary_path: Path | None) -> str:
+    """Laporan audit dengan 20 contoh acak, seed 42, dari seluruh baris."""
+
+    lines = ["# Audit preprocessing proposal Bab 3.3", "",
+             f'- Masukan: "{input_path}"',
+             f'- Keluaran: "{output_path}"' if output_path else "- Keluaran parquet belum ditulis.",
+             f'- Kamus: "{dictionary_path}"' if dictionary_path else
+             "- PARSIAL: kamus slang belum tersedia; slang belum dijalankan. Angka di bawah belum final.", ""]
+    for key, value in stats.items():
+        if key != "baris_berubah_per_aturan":
+            lines.append(f"- {key}: {value}")
+    lines += ["", "## Per aturan (perbandingan sebelum/sesudah langkah tersebut)", "",
+              "Satu baris dapat berubah pada lebih dari satu aturan; hitungan tidak dijumlahkan.", "",
+              "| Aturan | Baris berubah |", "| --- | ---: |"]
+    for key, value in stats["baris_berubah_per_aturan"].items():
+        lines.append(f"| {key} | {value} |")
+    lines += ["", "## Asumsi dan penyimpangan", "",
+              "Sumber teks adalah review asli + NFKC pada tabel lama. NFKC merupakan langkah pertama, "
+              "sebelum penghapusan URL; jumlah baris yang berubah ditampilkan pada aturan nfkc. "
+              "Setelah NFKC, U+200B/U+200C/U+200D/U+2060/U+FEFF dihapus, sedangkan "
+              "U+2028/U+2029/NBSP diganti spasi biasa pada aturan normalisasi_pemisah_unicode. "
+              "NBSP yang telah menjadi spasi pada NFKC dihitung pada aturan nfkc. "
+              "Kolom review, text_light, dan seluruh kolom lama dipertahankan apa adanya. "
+              "Karakter di luar huruf Unicode, "
+              "digit desimal, spasi, dan . , ! ? ' - diganti spasi agar kata tidak tergabung. "
+              "Tanda baca yang sama dan berurutan diringkas; kombinasi seperti !? tetap. "
+              "Huruf berulang dihitung sebagai normalisasi typo; tidak ada lowercase paksa.", "",
+              "Asumsi angka konservatif: hanya deretan >= 6 digit yang berdiri sendiri dihapus. "
+              "Angka pendek dan alfanumerik (128gb, 5g, a07, iphone 17) tetap. "
+              "Nomor yang dipisah spasi/tanda baca tidak digabung untuk dihapus.", "",
+              "Pencocokan slang tidak peka kapital, sekali jalan pada batas kata/frasa; "
+              "kapital semua/awal token dipertahankan. Frasa terlindungi diprioritaskan. "
+              "Mempertahankan kw adalah PENYIMPANGAN disengaja dari contoh normalisasi proposal 3.3.", "",
+              "PROTECTED_TERMS: " + ", ".join(f"`{term}`" for term in PROTECTED_TERMS), "",
+              "## Semantik duplikat dan rekomendasi", "",
+              "is_technical_duplicate: produk + text_light + timestamp berjam identik; kemunculan "
+              "setelah yang pertama dikecualikan dari include_for_inference. is_text_duplicate: "
+              "teks sama dalam produk, masih >= 2 ulasan setelah duplikat teknis disisihkan; "
+              "flag dapat menempel juga pada baris teknis dalam grup tersebut. Teks sama tidak otomatis spam.", "",
+              "Rekomendasi: pertahankan flag saat ini dan tinjau sampel duplikat sebelum mengubah aturan. "
+              "CLI sentimen tetap menginferensi semua teks nonkosong, termasuk flag include=False, "
+              "seperti versi lama; downstream dapat memfilter. Tidak ada perubahan include_for_inference. "
+              "Teks proposal kosong tetap menjadi baris dengan probabilitas NaN.", "",
+              "## 20 contoh acak (seluruh tabel, random_state=42)", "",
+              "| review_id | review | text_proposal |", "| --- | --- | --- |"]
+
+    def cell(value: object) -> str:
+        return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(
+            ">", "&gt;").replace("|", "&#124;").replace("\n", "<br>").replace("\r", "")
+
+    for row in table.sample(n=min(20, len(table)), random_state=42).itertuples():
+        lines.append("| " + " | ".join(cell(value) for value in
+                                       (row.review_id, row.review, row.text_proposal)) + " |")
+    return "\n".join(lines) + "\n"

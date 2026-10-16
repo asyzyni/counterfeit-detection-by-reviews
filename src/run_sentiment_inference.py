@@ -13,7 +13,8 @@ Dari folder model lokal (tanpa jaringan): --model-dir "<folder>".
 
 Keluaran: CSV (kolom asli + p_negatif, p_netral, p_positif + label_argmax) dan ringkasan
 sanity check (.json dan .md) di sampingnya. File keluaran yang sudah ada TIDAK ditimpa.
-Default: text_proposal dari "outputs/cleaned/reviews_clean_v2.parquet", max_length 512.
+Default: text_proposal dari "outputs/cleaned/reviews_clean_v2.parquet";
+max_length mengikuti ExperimentConfig.sentiment_max_length.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from .sentiment_inference import (
     SentimentModelConfig,
     argmax_label,
     check_max_length,
+    check_training_length,
     format_summary_md,
     load_sentiment_model,
     predict_sentiment_probs,
@@ -76,7 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-length", type=int, default=MAX_LENGTH,
-                        help="Batas token termasuk token khusus (default: 512); <= max_position_embeddings model")
+                        help=f"Batas token termasuk token khusus (default: {MAX_LENGTH}); <= max_position_embeddings model")
+    parser.add_argument("--allow-length-mismatch", action="store_true",
+                        help="Izinkan panjang berbeda dari fine-tuning; peringatan tetap dicatat di metadata")
     parser.add_argument("--limit", type=int, default=None, help="Hanya N baris pertama (uji coba)")
     parser.add_argument("--short-words", type=int, default=2, help="Ambang 'sangat pendek' (jumlah kata) untuk ringkasan")
     parser.add_argument("--sample-checks", type=int, default=16, help="Jumlah teks untuk pemeriksaan model")
@@ -144,6 +148,7 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
             batch_size=args.batch_size,
             max_length=args.max_length,
             strict_tokenizer_check=not args.no_tokenizer_strict,
+            allow_length_mismatch=args.allow_length_mismatch,
         )
         if args.revision:
             config.revision = args.revision
@@ -154,11 +159,15 @@ def run(args: argparse.Namespace, bundle: SentimentBundle | None = None) -> int:
             return EXIT_CHECK_FAILED
     try:
         check_max_length(args.max_length, bundle.max_position_embeddings)
+        bundle.meta.update(check_training_length(
+            args.max_length, allow_length_mismatch=args.allow_length_mismatch,
+        ))
     except ModelCheckError as exc:
         print(f"BERHENTI: {exc}")
         return EXIT_CHECK_FAILED
     bundle.max_length = args.max_length
     bundle.batch_size = args.batch_size
+    bundle.allow_length_mismatch = args.allow_length_mismatch
     print(f"Model siap di device: {bundle.device}")
 
     def write_summary(summary: dict | None, checks: list[dict], status: str) -> None:

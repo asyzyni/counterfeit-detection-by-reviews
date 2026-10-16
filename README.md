@@ -48,6 +48,10 @@ pip install -r requirements.txt
 ### 1. Konfigurasi Eksperimen
 Semua konfigurasi (path dataset, hiperparameter IndoBERT, komponen HMM, serta direktori output) dikelola terpusat di [`src/config.py`](src/config.py).
 
+Panjang inferensi IndoBERT mengikuti `ExperimentConfig.sentiment_max_length` (128), sama dengan fine-tuning. Kapasitas arsitektur 512 merupakan batas posisi model. CLI `src.run_sentiment_inference` dan notebook `notebooks/inferensi_rm1.ipynb` membaca konfigurasi tersebut. Penyimpangan panjang membutuhkan `--allow-length-mismatch`; peringatan dan keputusan dicatat dalam metadata. Nilai di atas `max_position_embeddings` tetap ditolak.
+
+Pada v4, 123 dari 73.184 ulasan yang diinferensi terpotong di 128 token (0,17%). Prediksi v5 mewarisi hasil v4 dengan pembaruan timestamp melalui `review_id`, tanpa inferensi ulang. Provenance v5 lama tidak memiliki field panjang inferensi; buktinya berasal dari metadata v4 dan kecocokan kolom prediksi. v2 berjalan dengan 512, digantikan oleh keputusan 128; angka historis v2 tetap dipertahankan.
+
 ### 2. Jalankan Pipeline
 
 Cleaning resmi dijalankan dengan `python -m src.cleaning.run` dan menghasilkan satu file `"outputs/cleaned/reviews_clean.parquet"` beserta laporan di `"outputs/cleaned/reports/"`. Baca hasil melalui `from src.cleaning import load_clean_reviews`, lalu `reviews = load_clean_reviews()`; secara bawaan hanya baris yang layak inferensi dikembalikan, terurut per produk dan `seq_in_product`. Gunakan `only_included=False` untuk seluruh baris. Pipeline lama `DataPreprocessor` dinonaktifkan untuk folder berformat baru agar hasil tidak tercampur. Rincian ada di [laporan cleaning](docs/laporan_cleaning.md).

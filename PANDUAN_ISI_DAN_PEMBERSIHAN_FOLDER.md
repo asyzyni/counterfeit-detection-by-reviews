@@ -2,6 +2,8 @@
 
 Tanggal pemeriksaan: **14 Oktober 2026**. Panduan ini menjelaskan fungsi setiap file yang ditemukan dan membantu menentukan mana yang perlu disimpan, dirapikan, diarsipkan, atau dibersihkan.
 
+**Pembaruan konfigurasi 16 Oktober 2026:** panjang inferensi IndoBERT mengikuti `ExperimentConfig.sentiment_max_length=128`, sama dengan fine-tuning; kapasitas arsitektur tetap 512. Modul, CLI, dan notebook membaca sumber konfigurasi yang sama. Panjang berbeda memerlukan `--allow-length-mismatch`, disertai peringatan dan catatan metadata. v2 berjalan dengan 512, digantikan oleh keputusan 128; rincian v2 di inventaris historis di bawah tetap memakai angka eksekusi aslinya. Metadata v3/v4 mencatat 128. Prediksi v5 identik dengan v4 melalui `review_id`; provenance migrasi v5 tidak merekam `max_length` sendiri. Pada v4/v5, 123 dari 73.184 ulasan yang diinferensi terpotong (0,17%).
+
 Inventaris mencakup **228 file yang sudah ada**, berukuran total **185.28 MiB**, di luar direktori internal `.git/` dan file panduan ini sendiri. File tersembunyi dan cache turut dicatat. `.git/` dijelaskan sebagai satu kesatuan karena merupakan basis data internal Git, bukan kumpulan berkas kerja yang perlu dibersihkan satu per satu. Ada **72 file cache/metadata sistem**, total **1.10 MiB**.
 
 Dasar pemeriksaan: daftar berkas, isi kode dan notebook tanpa eksekusi, header/metadata data, laporan hasil, serta hash SHA-256 untuk duplikat. Pipeline, inferensi model, dan rangkaian tes tidak dijalankan untuk membuat panduan ini. Rekomendasi merupakan hasil peninjauan; **belum ada file yang dipindahkan atau dihapus**. Kondisi ini adalah snapshot, bukan inventaris yang diperbarui otomatis.
